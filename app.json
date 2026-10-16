@@ -1,0 +1,74 @@
+{
+  "expo": {
+    "name": "ArtBlock",
+    "slug": "ArtBlock",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.princemahlaba.artblock",
+      "infoPlist": {
+        "NSCameraUsageDescription": "ArtBlock uses your camera to place line art on your paper so you can trace it.",
+        "NSPhotoLibraryUsageDescription": "ArtBlock saves a drawing to your photo library only when you ask.",
+        "NSPhotoLibraryAddUsageDescription": "ArtBlock saves a drawing to your photo library only when you ask.",
+        "ITSAppUsesNonExemptEncryption": false
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#E6F4FE",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "predictiveBackGestureEnabled": false,
+      "permissions": [
+        "android.permission.CAMERA",
+        "com.google.android.gms.permission.AD_ID",
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.WRITE_EXTERNAL_STORAGE",
+        "android.permission.READ_MEDIA_VISUAL_USER_SELECTED",
+        "android.permission.READ_MEDIA_IMAGES",
+        "android.permission.READ_MEDIA_VIDEO",
+        "android.permission.READ_MEDIA_AUDIO"
+      ]
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "ArtBlock uses your camera to place line art on your paper so you can trace it.",
+          "microphonePermission": "ArtBlock does not record your voice. iPhone asks for this with the camera.",
+          "recordAudioAndroid": false,
+          "barcodeScannerEnabled": false
+        }
+      ],
+      "expo-sharing",
+      [
+        "expo-tracking-transparency",
+        {
+          "userTrackingPermission": "This helps ArtBlock suggest drawing ideas and keep free sketch pages up to date."
+        }
+      ],
+      [
+        "expo-media-library",
+        {
+          "photosPermission": "ArtBlock saves a drawing to your photo library only when you ask.",
+          "savePhotosPermission": "ArtBlock saves a drawing to your photo library only when you ask.",
+          "isAccessMediaLocationEnabled": false
+        }
+      ],
+      "expo-localization"
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "222db628-ee4a-4e5f-975a-b277b773a9a3"
+      }
+    }
+  }
+}
