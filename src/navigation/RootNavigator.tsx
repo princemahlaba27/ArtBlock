@@ -9,11 +9,14 @@ import { useState } from 'react';
 
 import type { RootStackParamList } from './types';
 import { ARCameraTraceScreen } from '../screens/ARCameraTraceScreen';
-import { IdeaSpinnerScreen } from '../screens/IdeaSpinnerScreen';
+import { CanvasBuilderScreen } from '../screens/CanvasBuilderScreen';
 import { MySketchbookScreen } from '../screens/MySketchbookScreen';
+import { OnboardingScreen } from '../screens/OnboardingScreen';
 import { PaywallScreen } from '../screens/PaywallScreen';
 import { SketchRevealScreen } from '../screens/SketchRevealScreen';
-import { colors } from '../theme/colors';
+import { InstantStudioScreen } from '../screens/InstantStudioScreen';
+import { SettingsScreen } from '../screens/SettingsScreen';
+import { colors, fonts } from '../theme/colors';
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 
@@ -29,37 +32,54 @@ const theme = {
   },
 };
 
+const routeNames: (keyof RootStackParamList)[] = [
+  'Welcome',
+  'Studio',
+  'Settings',
+  'Canvas',
+  'Paywall',
+  'Trace',
+  'Reveal',
+  'Sketchbook',
+];
+
+function isRouteName(name: string | undefined): name is keyof RootStackParamList {
+  return routeNames.some((route) => route === name);
+}
+
 export default function RootNavigator() {
   const navigationRef = useNavigationContainerRef<RootStackParamList>();
-  const [routeName, setRouteName] = useState<keyof RootStackParamList>('Ideas');
+  const [routeName, setRouteName] = useState<keyof RootStackParamList>('Welcome');
 
   const syncRoute = () => {
     const name = navigationRef.getCurrentRoute()?.name;
-    if (
-      name === 'Ideas' ||
-      name === 'Paywall' ||
-      name === 'Trace' ||
-      name === 'Reveal' ||
-      name === 'Sketchbook'
-    ) {
-      setRouteName(name);
-    }
+    if (isRouteName(name)) setRouteName(name);
   };
+
+  const lightStatus =
+    routeName === 'Welcome' || routeName === 'Paywall' || routeName === 'Trace';
 
   return (
     <NavigationContainer ref={navigationRef} theme={theme} onReady={syncRoute} onStateChange={syncRoute}>
-      <StatusBar style={routeName === 'Trace' ? 'light' : 'dark'} />
+      <StatusBar style={lightStatus ? 'light' : 'dark'} />
       <Stack.Navigator
-        initialRouteName="Ideas"
+        initialRouteName="Welcome"
         screenOptions={{
           headerStyle: { backgroundColor: colors.canvas },
           headerTintColor: colors.ink,
-          headerTitleStyle: { fontWeight: '700' },
+          headerTitleStyle: { fontFamily: fonts.headingBold },
           headerShadowVisible: false,
           contentStyle: { backgroundColor: colors.canvas },
         }}
       >
-        <Stack.Screen name="Ideas" component={IdeaSpinnerScreen} options={{ title: 'Ideas' }} />
+        <Stack.Screen
+          name="Welcome"
+          component={OnboardingScreen}
+          options={{ headerShown: false, animation: 'fade' }}
+        />
+        <Stack.Screen name="Studio" component={InstantStudioScreen} options={{ headerShown: false }} />
+        <Stack.Screen name="Settings" component={SettingsScreen} options={{ headerShown: false }} />
+        <Stack.Screen name="Canvas" component={CanvasBuilderScreen} options={{ headerShown: false }} />
         <Stack.Screen
           name="Paywall"
           component={PaywallScreen}

@@ -103,6 +103,58 @@ export async function isPremium(): Promise<boolean> {
   return flags.premium || flags.paywallPassed;
 }
 
+const FREE_TRACE_KEY = 'hasUsedFreeTrace';
+
+let freeTraceLatched = false;
+
+/** The one free visit to the canvas and the camera HUD. */
+export async function hasUsedFreeTrace(): Promise<boolean> {
+  if (freeTraceLatched) return true;
+  const value = await AsyncStorage.getItem(FREE_TRACE_KEY);
+  freeTraceLatched = value === 'true';
+  return freeTraceLatched;
+}
+
+/** Set when the camera HUD is actually on screen, so that trace can finish. */
+export async function markFreeTraceUsed(): Promise<void> {
+  freeTraceLatched = true;
+  await AsyncStorage.setItem(FREE_TRACE_KEY, 'true');
+}
+
+const FIRST_TRACE_KEY = 'hasCompletedFirstTrace';
+
+let firstTraceLatched = false;
+
+export async function hasCompletedFirstTrace(): Promise<boolean> {
+  if (firstTraceLatched) return true;
+  const value = await AsyncStorage.getItem(FIRST_TRACE_KEY);
+  firstTraceLatched = value === 'true';
+  return firstTraceLatched;
+}
+
+export async function markFirstTraceComplete(): Promise<void> {
+  firstTraceLatched = true;
+  await AsyncStorage.setItem(FIRST_TRACE_KEY, 'true');
+}
+
+/** Store review runs once, after the first finished trace. Later saves do not ask again. */
+export async function requestReviewAfterFirstTrace(): Promise<void> {
+  if (await hasCompletedFirstTrace()) return;
+  await markFirstTraceComplete();
+  try {
+    const storeReview = await import('expo-store-review');
+    await storeReview.requestReview();
+  } catch {
+    // Web and simulators have no store sheet. Swallow so the screen does not redbox.
+  }
+}
+
+/** Another deck opens the paywall once the free trace is spent. */
+export async function mustShowPaywall(): Promise<boolean> {
+  if (await isPremium()) return false;
+  return hasUsedFreeTrace();
+}
+
 /** Remember which visit the first saved drawing happened on. */
 export async function noteSketchSaved(): Promise<void> {
   const flags = await loadFlags();

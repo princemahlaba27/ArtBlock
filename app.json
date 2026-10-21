@@ -9,10 +9,11 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.princemahlaba.artblock",
+      "buildNumber": "1",
       "infoPlist": {
         "NSCameraUsageDescription": "ArtBlock uses your camera to place line art on your paper so you can trace it.",
-        "NSPhotoLibraryUsageDescription": "ArtBlock saves a drawing to your photo library only when you ask.",
-        "NSPhotoLibraryAddUsageDescription": "ArtBlock saves a drawing to your photo library only when you ask.",
+        "NSPhotoLibraryUsageDescription": "ArtBlock needs access to your photo library to let you select reference art to trace and save your completed sketches.",
+        "NSPhotoLibraryAddUsageDescription": "ArtBlock needs access to your photo library to let you select reference art to trace and save your completed sketches.",
         "ITSAppUsesNonExemptEncryption": false
       }
     },
@@ -36,7 +37,7 @@
       ]
     },
     "web": {
-      "favicon": "./assets/favicon.png"
+      "favicon": "./assets/favicon.jpg"
     },
     "plugins": [
       [
@@ -58,12 +59,13 @@
       [
         "expo-media-library",
         {
-          "photosPermission": "ArtBlock saves a drawing to your photo library only when you ask.",
-          "savePhotosPermission": "ArtBlock saves a drawing to your photo library only when you ask.",
+          "photosPermission": "ArtBlock needs access to your photo library to let you select reference art to trace and save your completed sketches.",
+          "savePhotosPermission": "ArtBlock needs access to your photo library to let you select reference art to trace and save your completed sketches.",
           "isAccessMediaLocationEnabled": false
         }
       ],
-      "expo-localization"
+      "expo-localization",
+      "expo-font"
     ],
     "extra": {
       "eas": {

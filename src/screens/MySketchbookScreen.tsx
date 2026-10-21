@@ -18,7 +18,7 @@ import {
   totalDrawingSeconds,
   type SketchRecord,
 } from '../storage/sketchbook';
-import { colors, layout } from '../theme/colors';
+import { colors, fonts, layout, shadow } from '../theme/colors';
 
 function formatWhen(iso: string): string {
   const date = new Date(iso);
@@ -153,33 +153,32 @@ const styles = StyleSheet.create({
   },
   stats: {
     flexDirection: 'row',
-    gap: 8,
+    gap: 10,
   },
   stat: {
     flex: 1,
     minHeight: 96,
     backgroundColor: colors.card,
     borderRadius: layout.cardRadius,
-    borderWidth: 1,
-    borderColor: colors.stroke,
     paddingHorizontal: 8,
     paddingVertical: 12,
     alignItems: 'center',
     justifyContent: 'center',
+    ...shadow,
   },
   statValue: {
     color: colors.ink,
+    fontFamily: fonts.heading,
     fontSize: 18,
     lineHeight: 22,
-    fontWeight: '700',
     textAlign: 'center',
   },
   statLabel: {
     marginTop: 6,
     color: colors.muted,
+    fontFamily: fonts.bodyMedium,
     fontSize: 11,
     lineHeight: 14,
-    fontWeight: '600',
     textAlign: 'center',
   },
   status: {
@@ -189,10 +188,12 @@ const styles = StyleSheet.create({
   },
   statusText: {
     color: colors.muted,
+    fontFamily: fonts.body,
     fontSize: 15,
   },
   error: {
     color: colors.accent,
+    fontFamily: fonts.bodyMedium,
     fontSize: 15,
     lineHeight: 22,
     textAlign: 'center',
@@ -201,66 +202,67 @@ const styles = StyleSheet.create({
     marginTop: 28,
     backgroundColor: colors.card,
     borderRadius: layout.cardRadius,
-    borderWidth: 1,
-    borderColor: colors.stroke,
     padding: 20,
+    ...shadow,
   },
   emptyTitle: {
     color: colors.ink,
+    fontFamily: fonts.headingBold,
     fontSize: 18,
-    fontWeight: '700',
   },
   emptyBody: {
     marginTop: 8,
     color: colors.muted,
+    fontFamily: fonts.body,
     fontSize: 15,
     lineHeight: 22,
   },
   columns: {
     flexDirection: 'row',
-    gap: 10,
+    gap: 12,
     marginTop: 16,
   },
   column: {
     flex: 1,
-    gap: 10,
+    gap: 12,
   },
   card: {
     backgroundColor: colors.card,
     borderRadius: layout.cardRadius,
-    borderWidth: 1,
-    borderColor: colors.stroke,
     padding: 8,
+    ...shadow,
   },
   photo: {
     width: '100%',
-    borderRadius: 14,
+    borderRadius: 16,
     backgroundColor: colors.stroke,
   },
   missing: {
     width: '100%',
-    borderRadius: 14,
-    backgroundColor: colors.stroke,
+    borderRadius: 16,
+    backgroundColor: colors.canvas,
     alignItems: 'center',
     justifyContent: 'center',
     padding: 12,
   },
   missingText: {
     color: colors.muted,
+    fontFamily: fonts.bodyMedium,
     fontSize: 13,
     textAlign: 'center',
   },
   cardTitle: {
     marginTop: 8,
     color: colors.ink,
+    fontFamily: fonts.headingBold,
     fontSize: 14,
     lineHeight: 18,
-    fontWeight: '700',
   },
   cardMeta: {
     marginTop: 4,
     marginBottom: 4,
     color: colors.muted,
+    fontFamily: fonts.body,
     fontSize: 12,
     lineHeight: 16,
   },

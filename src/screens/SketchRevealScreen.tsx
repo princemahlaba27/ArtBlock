@@ -1,22 +1,22 @@
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import * as Haptics from 'expo-haptics';
-import * as MediaLibrary from 'expo-media-library';
 import * as Sharing from 'expo-sharing';
-import * as StoreReview from 'expo-store-review';
+import { usePostHog } from 'posthog-react-native';
 import { useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { BeforeAfterSlider } from '../components/BeforeAfterSlider';
 import { PermissionPrimer } from '../components/PermissionPrimer';
 import type { RootStackParamList } from '../navigation/types';
-import { saveFeedback } from '../storage/preferences';
+import { requestReviewAfterFirstTrace, saveFeedback } from '../storage/preferences';
 import { formatDuration, saveSketch } from '../storage/sketchbook';
-import { colors, layout } from '../theme/colors';
+import { buttonShadow, colors, fonts, layout, shadow } from '../theme/colors';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Reveal'>;
 
 export function SketchRevealScreen({ navigation, route }: Props) {
+  const posthog = usePostHog();
   const insets = useSafeAreaInsets();
   const { title, svg, photoUri, seconds } = route.params;
   const [savedUri, setSavedUri] = useState<string | null>(null);
@@ -44,6 +44,12 @@ export function SketchRevealScreen({ navigation, route }: Props) {
       setSavedUri(storedUri);
       setBanner(total === 1 ? 'Saved to My Sketchbook' : `${total} drawings saved`);
       if (total === 1) setAskReview(true);
+      void requestReviewAfterFirstTrace();
+      try {
+        posthog.capture('trace_completed');
+      } catch {
+        // A placeholder key must not take the screen down.
+      }
       void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => undefined);
     } catch {
       setError('Could not save this drawing. Try again.');
@@ -52,17 +58,10 @@ export function SketchRevealScreen({ navigation, route }: Props) {
     }
   };
 
-  const rate = async (value: number) => {
+  const rate = (value: number) => {
     setStars(value);
     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined);
-    if (value < 5) return;
-    setAskReview(false);
-    try {
-      const available = await StoreReview.isAvailableAsync();
-      if (available) await StoreReview.requestReview();
-    } catch {
-      setError('The store review did not open.');
-    }
+    if (value >= 5) setAskReview(false);
   };
 
   const sendFeedback = async () => {
@@ -75,6 +74,11 @@ export function SketchRevealScreen({ navigation, route }: Props) {
 
   const saveToRoll = async () => {
     setPhotoPrimer(false);
+    if (Platform.OS === 'web') {
+      setError('Saving to the camera roll works on your phone, not in the browser.');
+      return;
+    }
+    const MediaLibrary = require('expo-media-library');
     const current = await MediaLibrary.getPermissionsAsync(true);
     const next = current.granted ? current : await MediaLibrary.requestPermissionsAsync(true);
     if (!next.granted) {
@@ -101,6 +105,12 @@ export function SketchRevealScreen({ navigation, route }: Props) {
         UTI: 'public.jpeg',
         dialogTitle: 'Share to TikTok',
       });
+      void requestReviewAfterFirstTrace();
+      try {
+        posthog.capture('trace_completed');
+      } catch {
+        // A placeholder key must not take the screen down.
+      }
     } catch {
       setError('The share sheet did not open. Try again.');
     } finally {
@@ -167,7 +177,12 @@ export function SketchRevealScreen({ navigation, route }: Props) {
       {savedUri ? (
         <Pressable
           accessibilityRole="button"
-          onPress={() => navigation.navigate('Sketchbook')}
+          onPress={() =>
+            navigation.reset({
+              index: 1,
+              routes: [{ name: 'Studio' }, { name: 'Sketchbook' }],
+            })
+          }
           style={({ pressed }) => [styles.link, pressed && styles.pressed]}
         >
           <Text style={styles.linkText}>See My Sketchbook</Text>
@@ -230,19 +245,20 @@ const styles = StyleSheet.create({
   },
   backText: {
     color: colors.brand,
+    fontFamily: fonts.headingBold,
     fontSize: 16,
-    fontWeight: '700',
   },
   title: {
     marginTop: 8,
+    fontFamily: fonts.heading,
     fontSize: 22,
     lineHeight: 28,
-    fontWeight: '700',
     letterSpacing: -0.4,
     color: colors.ink,
   },
   time: {
     marginTop: 6,
+    fontFamily: fonts.body,
     fontSize: 15,
     lineHeight: 22,
     color: colors.muted,
@@ -250,23 +266,22 @@ const styles = StyleSheet.create({
   help: {
     marginTop: 14,
     marginBottom: 8,
+    fontFamily: fonts.bodyMedium,
     fontSize: 13,
-    fontWeight: '600',
     color: colors.muted,
   },
   banner: {
     marginTop: 16,
     backgroundColor: colors.card,
     borderRadius: layout.cardRadius,
-    borderWidth: 1,
-    borderColor: colors.accent,
     padding: 14,
+    ...shadow,
   },
   bannerText: {
     color: colors.ink,
+    fontFamily: fonts.headingBold,
     fontSize: 16,
     lineHeight: 22,
-    fontWeight: '700',
   },
   stars: {
     flexDirection: 'row',
@@ -278,23 +293,23 @@ const styles = StyleSheet.create({
     color: colors.muted,
   },
   starOn: {
-    color: colors.accent,
+    color: colors.brand,
   },
   input: {
     marginTop: 8,
     minHeight: 72,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: colors.stroke,
+    borderRadius: 16,
     backgroundColor: colors.canvas,
     padding: 12,
     color: colors.ink,
+    fontFamily: fonts.body,
     fontSize: 15,
     textAlignVertical: 'top',
   },
   error: {
     marginTop: 12,
     color: colors.accent,
+    fontFamily: fonts.bodyMedium,
     fontSize: 14,
     lineHeight: 20,
   },
@@ -305,26 +320,26 @@ const styles = StyleSheet.create({
     backgroundColor: colors.brand,
     alignItems: 'center',
     justifyContent: 'center',
+    ...buttonShadow,
   },
   primaryText: {
-    color: colors.canvas,
+    color: colors.white,
+    fontFamily: fonts.headingBold,
     fontSize: 16,
-    fontWeight: '700',
   },
   secondary: {
     marginTop: 12,
     height: layout.pillHeight,
     borderRadius: layout.pillRadius,
-    borderWidth: 1.5,
-    borderColor: colors.ink,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: colors.canvas,
+    backgroundColor: colors.card,
+    ...shadow,
   },
   secondaryText: {
     color: colors.ink,
+    fontFamily: fonts.headingBold,
     fontSize: 16,
-    fontWeight: '700',
   },
   link: {
     marginTop: 8,
@@ -334,8 +349,8 @@ const styles = StyleSheet.create({
   },
   linkText: {
     color: colors.brand,
+    fontFamily: fonts.headingBold,
     fontSize: 16,
-    fontWeight: '700',
   },
   disabled: {
     opacity: 0.5,

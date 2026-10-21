@@ -1,13 +1,15 @@
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { useFocusEffect, useIsFocused } from '@react-navigation/native';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { CameraView, useCameraPermissions } from 'expo-camera';
-import * as Device from 'expo-device';
 import * as Haptics from 'expo-haptics';
-import { usePostHog } from 'posthog-react-native';
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
+  Image,
   Linking,
+  Platform,
   Pressable,
   StyleSheet,
   Text,
@@ -17,52 +19,63 @@ import {
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, { useAnimatedStyle, useSharedValue } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import Svg, { Path, SvgXml } from 'react-native-svg';
+import Svg, { FeColorMatrix, Filter, Image as SvgImage, Path, SvgXml } from 'react-native-svg';
 import Slider from '@react-native-community/slider';
 
-import { logEvent } from '../analytics/logEvent';
-import { LeavingAlreadySheet, type LeaveReason } from '../components/LeavingAlreadySheet';
-import { PermissionPrimer } from '../components/PermissionPrimer';
-import {
-  composeStencil,
-  lineModes,
-  pieceById,
-  reels,
-  type LineMode,
-} from '../data/rouletteData';
+import { type LineMode } from '../data/rouletteData';
 import type { RootStackParamList } from '../navigation/types';
-import { askNotificationPermission, scheduleReminder } from '../permissions/reminders';
+import { toLineArt } from '../runtime/lineArt';
+import { isPreviewDevice } from '../runtime/previewDevice';
 import { listSketches } from '../storage/sketchbook';
-import { saveDrawLater } from '../storage/preferences';
-import { colors, layout } from '../theme/colors';
+import { markFreeTraceUsed } from '../storage/preferences';
+import { buttonShadow, colors, fonts, layout, shadow } from '../theme/colors';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Trace'>;
 
 const SIMULATOR_PHOTO_URI = 'simulator://artblock/drawing-placeholder';
+const INK_EDGE = '#111118';
+const NEON_EDGE = '#00E5FF';
+const TRACE_MODES: { id: LineMode; label: string }[] = [
+  { id: 'normal', label: 'Photo' },
+  { id: 'ink', label: 'Ink' },
+  { id: 'neon', label: 'Neon' },
+];
+const GRAY_CONTRAST = [
+  0.658, 1.291, 0.251, 0, -0.55, 0.658, 1.291, 0.251, 0, -0.55, 0.658, 1.291, 0.251, 0, -0.55, 0, 0, 0, 1,
+  0,
+];
+
+function OutlinePhoto({
+  uri,
+  width,
+  height,
+  filterId,
+}: {
+  uri: string;
+  width: number;
+  height: number;
+  filterId: string;
+}) {
+  return (
+    <Svg width={width} height={height}>
+      <Filter id={filterId}>
+        <FeColorMatrix type="matrix" values={GRAY_CONTRAST} />
+      </Filter>
+      <SvgImage
+        href={{ uri }}
+        width="100%"
+        height="100%"
+        preserveAspectRatio="xMidYMid meet"
+        filter={`url(#${filterId})`}
+      />
+    </Svg>
+  );
+}
 
 function CloseIcon({ color }: { color: string }) {
   return (
     <Svg width={22} height={22} viewBox="0 0 24 24">
       <Path d="M6 6 L18 18 M18 6 L6 18" stroke={color} strokeWidth={2.2} strokeLinecap="round" />
-    </Svg>
-  );
-}
-
-function LightIcon({ color }: { color: string }) {
-  return (
-    <Svg width={22} height={22} viewBox="0 0 24 24">
-      <Path
-        d="M12 3 V6 M12 18 V21 M4.9 4.9 L7 7 M17 17 L19.1 19.1 M3 12 H6 M18 12 H21 M4.9 19.1 L7 17 M17 7 L19.1 4.9"
-        stroke={color}
-        strokeWidth={1.8}
-        strokeLinecap="round"
-      />
-      <Path
-        d="M9 14c0-3 1.2-5 3-7 1.8 2 3 4 3 7a3 3 0 0 1-6 0Z"
-        stroke={color}
-        strokeWidth={1.8}
-        fill="none"
-      />
     </Svg>
   );
 }
@@ -90,47 +103,77 @@ function LockIcon({ color, closed }: { color: string; closed: boolean }) {
 export function ARCameraTraceScreen({ navigation, route }: Props) {
   const insets = useSafeAreaInsets();
   const isFocused = useIsFocused();
-  const isSimulator = !Device.isDevice;
-  const posthog = usePostHog();
+  const isSimulator = isPreviewDevice();
   const { width, height } = useWindowDimensions();
   const cameraRef = useRef<CameraView>(null);
   const startedAt = useRef(Date.now());
   const [permission, requestPermission] = useCameraPermissions();
   const [cameraReady, setCameraReady] = useState(isSimulator);
-  const [torchOn, setTorchOn] = useState(false);
+  const [flashMode, setFlashMode] = useState<'torch' | 'off'>('off');
   const [isLocked, setIsLocked] = useState(false);
   const [opacity, setOpacity] = useState(0.45);
   const [lineMode, setLineMode] = useState<LineMode>('normal');
+  const [lineArt, setLineArt] = useState<Record<string, string>>({});
   const [capturing, setCapturing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [celebrating, setCelebrating] = useState(false);
   const [badgeLine, setBadgeLine] = useState('Day 1 Complete • Novice Badge Earned');
-  const [leaving, setLeaving] = useState(false);
-  const [guide, setGuide] = useState(false);
-  const [ghost, setGhost] = useState(false);
-  const [focusLocked, setFocusLocked] = useState(true);
-  const [remindPrimer, setRemindPrimer] = useState(false);
+  const [exitAsk, setExitAsk] = useState(false);
+  const [focusLocked] = useState(true);
 
   useFocusEffect(
     useCallback(() => {
       setCapturing(false);
-      if (!Device.isDevice) setCameraReady(true);
+      if (isPreviewDevice()) setCameraReady(true);
       return () => {
-        if (Device.isDevice) setCameraReady(false);
+        if (!isPreviewDevice()) setCameraReady(false);
       };
     }, []),
   );
+
+  const showingHud = isSimulator || Boolean(permission?.granted);
+
+  useEffect(() => {
+    if (!showingHud) return;
+    void markFreeTraceUsed();
+  }, [showingHud]);
+
+  const referenceUris = useMemo(() => {
+    const slots = (route.params.slots ?? []).filter((uri): uri is string => Boolean(uri));
+    const all = route.params.imageUri ? [route.params.imageUri, ...slots] : slots;
+    return [...new Set(all)];
+  }, [route.params.imageUri, route.params.slots]);
+
+  useEffect(() => {
+    if (Platform.OS !== 'web' || referenceUris.length === 0) return;
+    let cancelled = false;
+    void (async () => {
+      const entries = await Promise.all(
+        referenceUris.flatMap((uri) =>
+          [INK_EDGE, NEON_EDGE].map(async (edge) => {
+            const art = await toLineArt(uri, edge);
+            return [`${edge}|${uri}`, art] as const;
+          }),
+        ),
+      );
+      if (!cancelled) setLineArt(Object.fromEntries(entries));
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [referenceUris]);
 
   const stencilWidth = Math.min(width * 0.82, 340);
   const stencilHeight = Math.min(height * 0.56, 500);
 
   const svg = useMemo(() => {
-    const subject = pieceById(reels[0].items, route.params.subjectId);
-    const plant = pieceById(reels[1].items, route.params.plantId);
-    const frame = pieceById(reels[2].items, route.params.frameId);
-    const quote = pieceById(reels[3].items, route.params.quoteId);
-    return composeStencil(subject, plant, frame, quote, lineMode);
-  }, [lineMode, route.params.frameId, route.params.plantId, route.params.quoteId, route.params.subjectId]);
+    const ink = lineMode === 'neon' ? '#00E5FF' : '#111118';
+    const lines = (route.params.prompts ?? []).map((prompt, index) => {
+      const safe = prompt.replace(/&/g, '&amp;').replace(/</g, '&lt;');
+      return `<text x="28" y="${78 + index * 78}" font-size="26" fill="${ink}">${safe}</text>`;
+    });
+    return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 420">${lines.join('')}</svg>`;
+  }, [lineMode, route.params.prompts]);
 
   const scale = useSharedValue(1);
   const savedScale = useSharedValue(1);
@@ -206,13 +249,17 @@ export function ARCameraTraceScreen({ navigation, route }: Props) {
     setCapturing(true);
     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => undefined);
     const seconds = Math.max(0, Math.round((Date.now() - startedAt.current) / 1000));
-    if (isSimulator) {
-      navigation.navigate('Reveal', {
-        title: route.params.title,
-        svg,
-        photoUri: SIMULATOR_PHOTO_URI,
-        seconds,
+    const openReveal = (photoUri: string) => {
+      navigation.reset({
+        index: 1,
+        routes: [
+          { name: 'Studio' },
+          { name: 'Reveal', params: { title: route.params.title, svg, photoUri, seconds } },
+        ],
       });
+    };
+    if (isSimulator) {
+      openReveal(SIMULATOR_PHOTO_URI);
       return;
     }
     const camera = cameraRef.current;
@@ -228,69 +275,30 @@ export function ARCameraTraceScreen({ navigation, route }: Props) {
     try {
       const photo = await camera.takePictureAsync({ quality: 0.85 });
       if (!photo?.uri) throw new Error('The photo did not save.');
-      navigation.navigate('Reveal', {
-        title: route.params.title,
-        svg,
-        photoUri: photo.uri,
-        seconds,
-      });
+      openReveal(photo.uri);
     } catch {
       setCapturing(false);
       setError('The photo did not save. Hold still and tap Snap your drawing again.');
     }
   };
 
-  const applyLeave = (reason: LeaveReason) => {
-    setLeaving(false);
-    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined);
-    logEvent(posthog, 'trace_exit_friction_logged', {
-      reason_code: reason,
-      intervention_ran: true,
-      pencil_time_seconds: Math.max(0, Math.round((Date.now() - startedAt.current) / 1000)),
-    });
-    if (reason === 'no_paper') {
-      void saveDrawLater({
-        title: route.params.title,
-        subjectId: route.params.subjectId,
-        plantId: route.params.plantId,
-        frameId: route.params.frameId,
-        quoteId: route.params.quoteId,
-      });
-      setRemindPrimer(true);
+  const confirmExit = () => {
+    if (Platform.OS === 'web') {
+      setExitAsk(true);
       return;
     }
-    if (reason === 'confused') {
-      setGuide(true);
-      return;
-    }
-    if (reason === 'tricky') {
-      setLineMode('ink');
-      setError(null);
-      return;
-    }
-    if (reason === 'dark') {
-      if (Device.isDevice) setTorchOn(true);
-      setLineMode('neon');
-      return;
-    }
-    setIsLocked(true);
-    setOpacity(0.28);
-    setFocusLocked(false);
-    setGhost(true);
+    Alert.alert('Exit Drawing?', 'Your current tracing progress will be closed.', [
+      { text: 'Keep Drawing', style: 'cancel' },
+      { text: 'Exit', style: 'destructive', onPress: () => navigation.navigate('Studio') },
+    ]);
   };
 
-  const confirmDeskReminder = async () => {
-    setRemindPrimer(false);
-    const granted = await askNotificationPermission();
-    if (granted) {
-      await scheduleReminder({
-        seconds: 3 * 60 * 60,
-        title: 'Your drawing is waiting',
-        body: 'The idea you saved is ready when you have paper.',
-      });
-    }
-    navigation.goBack();
+  const shownUri = (uri: string) => {
+    if (lineMode === 'normal' || Platform.OS !== 'web') return uri;
+    const edge = lineMode === 'neon' ? NEON_EDGE : INK_EDGE;
+    return lineArt[`${edge}|${uri}`] ?? uri;
   };
+  const nativeOutline = Platform.OS !== 'web' && lineMode !== 'normal';
 
   if (!isSimulator && !permission) {
     return (
@@ -338,14 +346,15 @@ export function ARCameraTraceScreen({ navigation, route }: Props) {
     <View style={styles.root}>
       {isSimulator ? (
         <View style={styles.simulatorFeed}>
-          <Text style={styles.simulatorLabel}>Camera Feed (Simulator Mode)</Text>
+          {__DEV__ ? <Text style={styles.simulatorLabel}>Camera Feed (Simulator Mode)</Text> : null}
         </View>
       ) : isFocused ? (
         <CameraView
           ref={cameraRef}
           style={StyleSheet.absoluteFill}
           facing="back"
-          enableTorch={torchOn}
+          enableTorch={flashMode === 'torch'}
+          flash={Platform.OS === 'web' ? (flashMode as 'off') : 'off'}
           // SDK 57: "on" focuses once and then locks. "off" lets the lens look again.
           autofocus={focusLocked ? 'on' : 'off'}
           mode="picture"
@@ -364,7 +373,45 @@ export function ARCameraTraceScreen({ navigation, route }: Props) {
             collapsable={false}
           >
             <Animated.View pointerEvents="none" style={[styles.stencil, stencilStyle, { opacity }]}>
-              <SvgXml xml={svg} width={stencilWidth} height={stencilHeight} />
+              {route.params.mode === 'single' && route.params.imageUri ? (
+                nativeOutline ? (
+                  <OutlinePhoto
+                    uri={route.params.imageUri}
+                    width={stencilWidth}
+                    height={stencilHeight}
+                    filterId="trace-gray-main"
+                  />
+                ) : (
+                  <Image
+                    source={{ uri: shownUri(route.params.imageUri) }}
+                    style={{ width: stencilWidth, height: stencilHeight }}
+                    resizeMode="contain"
+                  />
+                )
+              ) : route.params.slots?.some(Boolean) || route.params.imageUri ? (
+                <View style={{ width: stencilWidth, height: stencilHeight, flexDirection: 'row', flexWrap: 'wrap' }}>
+                  {(route.params.slots?.length ? route.params.slots : [route.params.imageUri ?? null]).map(
+                    (uri, index) => (
+                      <View key={`${uri ?? 'empty'}-${index}`} style={{ width: '50%', height: '50%', padding: 6 }}>
+                        {uri ? (
+                          nativeOutline ? (
+                            <OutlinePhoto
+                              uri={uri}
+                              width={stencilWidth / 2 - 12}
+                              height={stencilHeight / 2 - 12}
+                              filterId={`trace-gray-${index}`}
+                            />
+                          ) : (
+                            <Image source={{ uri: shownUri(uri) }} style={{ width: '100%', height: '100%' }} resizeMode="contain" />
+                          )
+                        ) : null}
+                      </View>
+                    ),
+                  )}
+                </View>
+              ) : (
+                <SvgXml xml={svg} width={stencilWidth} height={stencilHeight} />
+              )}
             </Animated.View>
           </View>
         </GestureDetector>
@@ -376,23 +423,26 @@ export function ARCameraTraceScreen({ navigation, route }: Props) {
             accessibilityRole="button"
             accessibilityLabel="Leave tracing"
             disabled={capturing}
-            onPress={() => setLeaving(true)}
+            onPress={confirmExit}
             style={[styles.circle, capturing && styles.disabled]}
           >
-            <CloseIcon color={colors.canvas} />
+            <CloseIcon color={colors.white} />
           </Pressable>
           <View style={styles.topRight} pointerEvents="box-none">
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel={torchOn ? 'Turn light off' : 'Turn light on'}
+              accessibilityLabel={flashMode === 'torch' ? 'Turn flashlight off' : 'Turn flashlight on'}
               onPress={() => {
-                if (!Device.isDevice) return;
                 void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined);
-                setTorchOn((value) => !value);
+                setFlashMode((value) => (value === 'torch' ? 'off' : 'torch'));
               }}
-              style={[styles.circle, torchOn && styles.circleOn]}
+              style={[styles.circle, flashMode === 'torch' && styles.circleOn]}
             >
-              <LightIcon color={torchOn ? colors.ink : colors.canvas} />
+              <Ionicons
+                name={flashMode === 'torch' ? 'flashlight' : 'flashlight-outline'}
+                size={22}
+                color={flashMode === 'torch' ? colors.ink : colors.white}
+              />
             </Pressable>
             <Pressable
               accessibilityRole="button"
@@ -403,26 +453,45 @@ export function ARCameraTraceScreen({ navigation, route }: Props) {
               }}
               style={[styles.circle, isLocked && styles.circleLocked]}
             >
-              <LockIcon color={isLocked ? colors.accent : colors.canvas} closed={isLocked} />
+              <LockIcon color={isLocked ? colors.accent : colors.white} closed={isLocked} />
             </Pressable>
           </View>
         </View>
 
         <View style={[styles.dock, { marginBottom: Math.max(insets.bottom, 16) }]}>
           {capturing ? <Text style={styles.hint}>Taking the photo…</Text> : null}
-          {ghost ? <Text style={styles.hint}>Line the page back up with the faint lines.</Text> : null}
           {error ? <Text style={styles.error}>{error}</Text> : null}
           <Text style={styles.hint}>
             {isLocked
               ? 'Lines are locked. Draw on your paper.'
               : 'Pinch, turn, or drag the lines. Then lock them.'}
           </Text>
+          <View style={styles.modes}>
+            {TRACE_MODES.map((mode) => {
+              const selected = lineMode === mode.id;
+              return (
+                <Pressable
+                  key={mode.id}
+                  accessibilityRole="button"
+                  accessibilityLabel={mode.label}
+                  accessibilityState={{ selected }}
+                  onPress={() => {
+                    void Haptics.selectionAsync().catch(() => undefined);
+                    setLineMode(mode.id);
+                  }}
+                  style={[styles.mode, selected && styles.modeOn]}
+                >
+                  <Text style={styles.modeText}>{mode.label}</Text>
+                </Pressable>
+              );
+            })}
+          </View>
           <View style={styles.sliderRow}>
             <Text style={styles.sliderLabel}>Lines</Text>
             <Slider
               style={styles.slider}
-              minimumValue={0.05}
-              maximumValue={1}
+              minimumValue={0.1}
+              maximumValue={0.85}
               value={opacity}
               onValueChange={setOpacity}
               minimumTrackTintColor={colors.brand}
@@ -432,53 +501,20 @@ export function ARCameraTraceScreen({ navigation, route }: Props) {
             />
             <Text style={styles.percent}>{Math.round(opacity * 100)}%</Text>
           </View>
-          <View style={styles.modes}>
-            {lineModes.map((mode) => {
-              const selected = mode.id === lineMode;
-              return (
-                <Pressable
-                  key={mode.id}
-                  accessibilityRole="button"
-                  accessibilityState={{ selected }}
-                  onPress={() => {
-                    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined);
-                    setLineMode(mode.id);
-                  }}
-                  style={[styles.mode, selected && styles.modeOn]}
-                >
-                  <Text style={[styles.modeText, selected && styles.modeTextOn]}>{mode.label}</Text>
-                </Pressable>
-              );
-            })}
-          </View>
-          {ghost ? (
-            <Pressable
-              accessibilityRole="button"
-              onPress={() => {
-                setFocusLocked(true);
-                setGhost(false);
-                setOpacity(0.45);
-              }}
-              style={({ pressed }) => [styles.finish, pressed && styles.pressed]}
-            >
-              <Text style={styles.finishText}>Lock focus again</Text>
-            </Pressable>
-          ) : (
-            <Pressable
-              accessibilityRole="button"
-              disabled={!readyToFinish || capturing || celebrating}
-              onPress={() => void finish()}
-              style={({ pressed }) => [
-                styles.finish,
-                (!readyToFinish || capturing || celebrating) && styles.disabled,
-                pressed && readyToFinish && !capturing && !celebrating && styles.pressed,
-              ]}
-            >
-              <Text style={styles.finishText}>
-                {readyToFinish ? 'Finish Drawing' : 'Starting camera…'}
-              </Text>
-            </Pressable>
-          )}
+          <Pressable
+            accessibilityRole="button"
+            disabled={!readyToFinish || capturing || celebrating}
+            onPress={() => void finish()}
+            style={({ pressed }) => [
+              styles.finish,
+              (!readyToFinish || capturing || celebrating) && styles.disabled,
+              pressed && readyToFinish && !capturing && !celebrating && styles.pressed,
+            ]}
+          >
+            <Text style={styles.finishText}>
+              {readyToFinish ? 'Finish Drawing' : 'Starting camera…'}
+            </Text>
+          </Pressable>
         </View>
       </View>
 
@@ -509,37 +545,30 @@ export function ARCameraTraceScreen({ navigation, route }: Props) {
         </View>
       ) : null}
 
-      {guide ? (
-        <View style={styles.celebrateWrap}>
-          <View style={styles.celebrateCard}>
-            <Text style={styles.celebrateTitle}>Phone on a glass</Text>
-            <Text style={styles.celebrateBody}>
-              Set a glass on the paper and rest the phone on top, camera facing down. Your hands
-              draw underneath the lines.
-            </Text>
+      {exitAsk ? (
+        <View style={styles.exitWrap}>
+          <View style={styles.exitCard}>
+            <Text style={styles.exitTitle}>Exit Drawing?</Text>
+            <Text style={styles.exitBody}>Your current tracing progress will be closed.</Text>
             <Pressable
               accessibilityRole="button"
-              onPress={() => setGuide(false)}
-              style={({ pressed }) => [styles.primary, pressed && styles.pressed]}
+              accessibilityLabel="Keep Drawing"
+              onPress={() => setExitAsk(false)}
+              style={({ pressed }) => [styles.exitKeep, pressed && styles.pressed]}
             >
-              <Text style={styles.primaryText}>Back to the lines</Text>
+              <Text style={styles.exitKeepText}>Keep Drawing</Text>
+            </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Exit"
+              onPress={() => navigation.navigate('Studio')}
+              style={({ pressed }) => [styles.exitLeave, pressed && styles.pressed]}
+            >
+              <Text style={styles.exitLeaveText}>Exit</Text>
             </Pressable>
           </View>
         </View>
       ) : null}
-
-      <LeavingAlreadySheet visible={leaving} onClose={() => setLeaving(false)} onSelect={applyLeave} />
-      <PermissionPrimer
-        visible={remindPrimer}
-        title="Remind you in 3 hours?"
-        body="This idea is saved for later. ArtBlock can send one note when it’s time to draw."
-        confirmLabel="Remind me"
-        onConfirm={() => void confirmDeskReminder()}
-        onDismiss={() => {
-          setRemindPrimer(false);
-          navigation.goBack();
-        }}
-      />
     </View>
   );
 }
@@ -560,9 +589,9 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   simulatorLabel: {
-    color: '#F4F4F5',
+    color: colors.white,
+    fontFamily: fonts.bodyMedium,
     fontSize: 16,
-    fontWeight: '600',
   },
   gestureLayer: {
     ...StyleSheet.absoluteFill,
@@ -596,12 +625,12 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   circleOn: {
-    backgroundColor: colors.canvas,
+    backgroundColor: colors.white,
   },
   circleLocked: {
-    backgroundColor: colors.canvas,
+    backgroundColor: colors.white,
     borderWidth: 2,
-    borderColor: colors.accent,
+    borderColor: '#FF3366',
   },
   dock: {
     position: 'absolute',
@@ -613,26 +642,53 @@ const styles = StyleSheet.create({
     padding: 16,
   },
   hint: {
-    color: colors.canvas,
+    color: colors.white,
+    fontFamily: fonts.body,
     fontSize: 13,
     lineHeight: 18,
     marginBottom: 8,
   },
   error: {
     color: colors.accent,
+    fontFamily: fonts.bodyMedium,
     fontSize: 13,
     lineHeight: 18,
     marginBottom: 8,
+  },
+  modes: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 12,
+  },
+  mode: {
+    flex: 1,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#F2F3F8',
+    borderWidth: 2,
+    borderColor: 'transparent',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  modeOn: {
+    backgroundColor: '#FFFFFF',
+    borderColor: '#FF2D55',
+  },
+  modeText: {
+    color: '#111118',
+    fontFamily: fonts.headingBold,
+    fontSize: 13,
   },
   sliderRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
+    marginBottom: 12,
   },
   sliderLabel: {
     color: colors.muted,
+    fontFamily: fonts.bodyMedium,
     fontSize: 13,
-    fontWeight: '600',
     width: 40,
   },
   slider: {
@@ -640,36 +696,11 @@ const styles = StyleSheet.create({
     height: 40,
   },
   percent: {
-    color: colors.canvas,
+    color: colors.white,
+    fontFamily: fonts.bodyMedium,
     fontSize: 13,
-    fontWeight: '600',
     width: 40,
     textAlign: 'right',
-  },
-  modes: {
-    flexDirection: 'row',
-    gap: 8,
-    marginTop: 4,
-    marginBottom: 12,
-  },
-  mode: {
-    flex: 1,
-    height: 40,
-    borderRadius: 20,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: 'rgba(255, 255, 255, 0.10)',
-  },
-  modeOn: {
-    backgroundColor: colors.canvas,
-  },
-  modeText: {
-    color: colors.canvas,
-    fontSize: 14,
-    fontWeight: '700',
-  },
-  modeTextOn: {
-    color: colors.ink,
   },
   finish: {
     height: layout.pillHeight,
@@ -677,11 +708,12 @@ const styles = StyleSheet.create({
     backgroundColor: colors.brand,
     alignItems: 'center',
     justifyContent: 'center',
+    ...buttonShadow,
   },
   finishText: {
-    color: colors.canvas,
+    color: colors.white,
+    fontFamily: fonts.headingBold,
     fontSize: 16,
-    fontWeight: '700',
   },
   disabled: {
     opacity: 0.5,
@@ -696,19 +728,21 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(30, 30, 36, 0.28)',
   },
   celebrateCard: {
-    backgroundColor: colors.canvas,
+    backgroundColor: colors.card,
     borderRadius: layout.cardRadius,
     padding: 20,
+    ...shadow,
   },
   celebrateTitle: {
+    fontFamily: fonts.heading,
     fontSize: 22,
     lineHeight: 28,
-    fontWeight: '700',
     letterSpacing: -0.4,
     color: colors.ink,
   },
   celebrateBody: {
     marginTop: 8,
+    fontFamily: fonts.body,
     fontSize: 15,
     lineHeight: 22,
     color: colors.muted,
@@ -720,13 +754,14 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   permissionTitle: {
+    fontFamily: fonts.heading,
     fontSize: 28,
-    fontWeight: '700',
     color: colors.ink,
     letterSpacing: -0.5,
   },
   permissionBody: {
     marginTop: 12,
+    fontFamily: fonts.body,
     fontSize: 15,
     lineHeight: 22,
     color: colors.muted,
@@ -738,11 +773,12 @@ const styles = StyleSheet.create({
     backgroundColor: colors.brand,
     alignItems: 'center',
     justifyContent: 'center',
+    ...buttonShadow,
   },
   primaryText: {
-    color: colors.canvas,
+    color: colors.white,
+    fontFamily: fonts.headingBold,
     fontSize: 16,
-    fontWeight: '700',
   },
   link: {
     marginTop: 12,
@@ -752,7 +788,57 @@ const styles = StyleSheet.create({
   },
   linkText: {
     color: colors.brand,
+    fontFamily: fonts.headingBold,
     fontSize: 16,
-    fontWeight: '700',
+  },
+  exitWrap: {
+    ...StyleSheet.absoluteFill,
+    justifyContent: 'center',
+    padding: 24,
+    backgroundColor: 'rgba(17, 17, 24, 0.45)',
+  },
+  exitCard: {
+    backgroundColor: '#18181B',
+    borderRadius: 28,
+    padding: 20,
+  },
+  exitTitle: {
+    color: '#FFFFFF',
+    fontFamily: fonts.heading,
+    fontSize: 22,
+    letterSpacing: -0.5,
+  },
+  exitBody: {
+    marginTop: 8,
+    color: '#8E8E93',
+    fontFamily: fonts.body,
+    fontSize: 15,
+    lineHeight: 22,
+  },
+  exitKeep: {
+    marginTop: 16,
+    height: 52,
+    borderRadius: 24,
+    backgroundColor: '#F2F3F8',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  exitKeepText: {
+    color: '#111118',
+    fontFamily: fonts.headingBold,
+    fontSize: 17,
+  },
+  exitLeave: {
+    marginTop: 10,
+    height: 52,
+    borderRadius: 24,
+    backgroundColor: '#FF2D55',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  exitLeaveText: {
+    color: '#FFFFFF',
+    fontFamily: fonts.headingBold,
+    fontSize: 17,
   },
 });

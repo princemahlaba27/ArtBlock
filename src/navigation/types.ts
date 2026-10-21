@@ -1,9 +1,15 @@
-export type TraceParams = {
+export type DeckParams = {
   title: string;
-  subjectId: string;
-  plantId: string;
-  frameId: string;
-  quoteId: string;
+  prompts: string[];
+  /** One photo fills the stencil. A spread uses the four polaroid slots. */
+  mode?: 'single' | 'spread';
+  /** Line-art image for each prompt. Missing slots are null. */
+  slots?: (string | null)[];
+  imageUri?: string;
+};
+
+export type PaywallParams = DeckParams & {
+  intent?: 'deck' | 'trace';
 };
 
 export type RevealParams = {
@@ -14,9 +20,12 @@ export type RevealParams = {
 };
 
 export type RootStackParamList = {
-  Ideas: undefined;
-  Paywall: TraceParams;
-  Trace: TraceParams;
+  Welcome: undefined;
+  Studio: undefined;
+  Settings: undefined;
+  Canvas: DeckParams;
+  Paywall: PaywallParams;
+  Trace: DeckParams;
   Reveal: RevealParams;
   Sketchbook: undefined;
 };

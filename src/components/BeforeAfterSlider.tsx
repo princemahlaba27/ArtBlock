@@ -4,7 +4,7 @@ import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, { useAnimatedStyle, useSharedValue } from 'react-native-reanimated';
 import { SvgXml } from 'react-native-svg';
 
-import { colors, layout } from '../theme/colors';
+import { colors, fonts, layout, shadow } from '../theme/colors';
 
 type BeforeAfterSliderProps = {
   svg: string;
@@ -80,8 +80,7 @@ const styles = StyleSheet.create({
     borderRadius: layout.cardRadius,
     overflow: 'hidden',
     backgroundColor: colors.ink,
-    borderWidth: 1,
-    borderColor: colors.stroke,
+    ...shadow,
   },
   clip: {
     position: 'absolute',
@@ -91,7 +90,7 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
   },
   stencil: {
-    backgroundColor: colors.canvas,
+    backgroundColor: colors.card,
   },
   labels: {
     position: 'absolute',
@@ -108,18 +107,18 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     paddingHorizontal: 10,
     paddingVertical: 4,
+    fontFamily: fonts.headingBold,
     fontSize: 12,
-    fontWeight: '700',
   },
   photoLabel: {
     backgroundColor: colors.hud,
-    color: colors.canvas,
+    color: colors.white,
     overflow: 'hidden',
     borderRadius: 12,
     paddingHorizontal: 10,
     paddingVertical: 4,
+    fontFamily: fonts.headingBold,
     fontSize: 12,
-    fontWeight: '700',
   },
   handle: {
     position: 'absolute',
@@ -145,8 +144,8 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   knobText: {
-    color: colors.canvas,
+    color: colors.white,
+    fontFamily: fonts.headingBold,
     fontSize: 16,
-    fontWeight: '700',
   },
 });

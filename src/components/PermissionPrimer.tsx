@@ -1,6 +1,6 @@
 import { Modal, Pressable, StyleSheet, Text, View } from 'react-native';
 
-import { colors, layout } from '../theme/colors';
+import { buttonShadow, colors, fonts, layout, shadow } from '../theme/colors';
 
 type Props = {
   visible: boolean;
@@ -44,26 +44,26 @@ export function PermissionPrimer({
 const styles = StyleSheet.create({
   backdrop: {
     flex: 1,
-    backgroundColor: 'rgba(30, 30, 36, 0.45)',
+    backgroundColor: 'rgba(28, 28, 30, 0.45)',
     justifyContent: 'flex-end',
     padding: 16,
   },
   card: {
-    backgroundColor: colors.canvas,
+    backgroundColor: colors.card,
     borderRadius: layout.cardRadius,
-    borderWidth: 1,
-    borderColor: colors.stroke,
     padding: 20,
+    ...shadow,
   },
   title: {
+    fontFamily: fonts.heading,
     fontSize: 22,
     lineHeight: 28,
-    fontWeight: '700',
     letterSpacing: -0.4,
     color: colors.ink,
   },
   body: {
     marginTop: 10,
+    fontFamily: fonts.body,
     fontSize: 15,
     lineHeight: 22,
     color: colors.muted,
@@ -75,11 +75,12 @@ const styles = StyleSheet.create({
     backgroundColor: colors.brand,
     alignItems: 'center',
     justifyContent: 'center',
+    ...buttonShadow,
   },
   primaryText: {
-    color: colors.canvas,
+    color: colors.white,
+    fontFamily: fonts.headingBold,
     fontSize: 16,
-    fontWeight: '700',
   },
   link: {
     marginTop: 8,
@@ -89,8 +90,8 @@ const styles = StyleSheet.create({
   },
   linkText: {
     color: colors.brand,
+    fontFamily: fonts.headingBold,
     fontSize: 16,
-    fontWeight: '700',
   },
   pressed: {
     transform: [{ scale: 0.97 }],

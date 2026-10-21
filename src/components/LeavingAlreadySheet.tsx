@@ -1,6 +1,6 @@
 import { Modal, Pressable, StyleSheet, Text, View } from 'react-native';
 
-import { colors, layout } from '../theme/colors';
+import { colors, fonts, layout, shadow } from '../theme/colors';
 
 export type LeaveReason = 'no_paper' | 'confused' | 'tricky' | 'dark' | 'drift';
 
@@ -47,25 +47,27 @@ export function LeavingAlreadySheet({ visible, onClose, onSelect }: Props) {
 const styles = StyleSheet.create({
   backdrop: {
     flex: 1,
-    backgroundColor: 'rgba(30, 30, 36, 0.45)',
+    backgroundColor: 'rgba(28, 28, 30, 0.45)',
     justifyContent: 'flex-end',
   },
   sheet: {
-    backgroundColor: colors.canvas,
+    backgroundColor: colors.card,
     borderTopLeftRadius: layout.cardRadius,
     borderTopRightRadius: layout.cardRadius,
     padding: 20,
     paddingBottom: 28,
+    ...shadow,
   },
   title: {
+    fontFamily: fonts.heading,
     fontSize: 22,
-    fontWeight: '700',
     letterSpacing: -0.4,
     color: colors.ink,
   },
   body: {
     marginTop: 6,
     marginBottom: 12,
+    fontFamily: fonts.body,
     fontSize: 15,
     lineHeight: 22,
     color: colors.muted,
@@ -77,9 +79,9 @@ const styles = StyleSheet.create({
     borderTopColor: colors.stroke,
   },
   rowText: {
+    fontFamily: fonts.bodyMedium,
     fontSize: 16,
     color: colors.ink,
-    fontWeight: '600',
   },
   link: {
     marginTop: 8,
@@ -89,8 +91,8 @@ const styles = StyleSheet.create({
   },
   linkText: {
     color: colors.brand,
+    fontFamily: fonts.headingBold,
     fontSize: 16,
-    fontWeight: '700',
   },
   pressed: {
     opacity: 0.7,
