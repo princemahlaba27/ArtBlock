@@ -3,15 +3,17 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import * as Clipboard from 'expo-clipboard';
 import * as Haptics from 'expo-haptics';
 import * as ImagePicker from 'expo-image-picker';
+import { useFocusEffect } from '@react-navigation/native';
 import { usePostHog } from 'posthog-react-native';
-import { useEffect, useRef, useState } from 'react';
-import { Alert, AppState, Image, Linking, Platform, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { Alert, AppState, Image, Linking, Platform, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import type { RootStackParamList } from '../navigation/types';
+import type { RevealParams, RootStackParamList } from '../navigation/types';
 import { isPreviewDevice } from '../runtime/previewDevice';
 import { grantPremium, hasUsedFreeTrace, isPremium as readLocalPremium } from '../storage/preferences';
-import { fonts } from '../theme/colors';
+import { formatDuration, listSketches, sketchPhotoUri, type SketchRecord } from '../storage/sketchbook';
+import { colors, fonts, layout } from '../theme/colors';
 
 const paper = '#F8F9FD';
 const hero = '#FF2D55';
@@ -46,6 +48,69 @@ type CameraPermissionApi = {
 };
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Studio'>;
+
+const RECENT_LIMIT = 5;
+
+function formatSketchDate(iso: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+
+function mostRecentSketches(sketches: SketchRecord[]): SketchRecord[] {
+  return [...sketches]
+    .sort((a, b) => {
+      const aTime = Date.parse(a.date);
+      const bTime = Date.parse(b.date);
+      return (Number.isNaN(bTime) ? 0 : bTime) - (Number.isNaN(aTime) ? 0 : aTime);
+    })
+    .slice(0, RECENT_LIMIT);
+}
+
+/** Saved sketches store the user photo, not a reference image or stencil. */
+function revealParamsForSketch(sketch: SketchRecord): RevealParams {
+  return {
+    title: sketch.title,
+    photoUri: sketchPhotoUri(sketch.photoFilename),
+    seconds: sketch.seconds,
+  };
+}
+
+function RecentSketchCard({ sketch, onPress }: { sketch: SketchRecord; onPress: () => void }) {
+  const [failed, setFailed] = useState(false);
+  const when = formatSketchDate(sketch.date);
+  const duration = formatDuration(sketch.seconds);
+  return (
+    <TouchableOpacity
+      accessibilityRole="button"
+      accessibilityLabel={`${sketch.title}, ${when}, ${duration}`}
+      onPress={onPress}
+      style={styles.recentCard}
+    >
+      {failed ? (
+        <View style={styles.recentThumb}>
+          <Text style={styles.recentMissing}>Photo unavailable</Text>
+        </View>
+      ) : (
+        <Image
+          accessibilityIgnoresInvertColors
+          source={{ uri: sketchPhotoUri(sketch.photoFilename) }}
+          style={styles.recentThumb}
+          resizeMode="cover"
+          onError={() => setFailed(true)}
+        />
+      )}
+      {when ? (
+        <Text style={styles.recentDate} numberOfLines={1}>
+          {when}
+        </Text>
+      ) : null}
+      <Text style={styles.recentDuration} numberOfLines={1}>
+        {duration}
+      </Text>
+    </TouchableOpacity>
+  );
+}
 
 async function loadCameraPermissions(): Promise<CameraPermissionApi> {
   const camera = await import('expo-camera');
@@ -100,6 +165,9 @@ export function InstantStudioScreen({ navigation }: Props) {
   const [cameraSlip, setCameraSlip] = useState(false);
   const [isPremium, setIsPremium] = useState(false);
   const [freeTraceUsed, setFreeTraceUsed] = useState(false);
+  const [recentSketches, setRecentSketches] = useState<SketchRecord[]>([]);
+  const [recentReady, setRecentReady] = useState(false);
+  const [recentFailed, setRecentFailed] = useState(false);
   const imageUriRef = useRef<string | null>(null);
   const handlePasteRef = useRef<(quiet?: boolean) => Promise<void>>(async () => undefined);
   const prompt = PROMPTS[promptIndex] ?? PROMPTS[0];
@@ -198,6 +266,28 @@ export function InstantStudioScreen({ navigation }: Props) {
       // A closed picker or a missing native module leaves the frame as it is.
     }
   };
+
+  useFocusEffect(
+    useCallback(() => {
+      let active = true;
+      listSketches()
+        .then((next) => {
+          if (!active) return;
+          setRecentSketches(mostRecentSketches(next));
+          setRecentFailed(false);
+        })
+        .catch(() => {
+          if (!active) return;
+          setRecentFailed(true);
+        })
+        .finally(() => {
+          if (active) setRecentReady(true);
+        });
+      return () => {
+        active = false;
+      };
+    }, []),
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -445,6 +535,37 @@ export function InstantStudioScreen({ navigation }: Props) {
               <Text style={styles.primaryText}>Paste Image</Text>
             </TouchableOpacity>
           )}
+
+          <View style={styles.recent}>
+            <View style={styles.recentHeader}>
+              <Text style={styles.recentTitle}>Recent Sketches</Text>
+              <TouchableOpacity
+                accessibilityRole="button"
+                accessibilityLabel="See all sketches"
+                onPress={() => navigation.navigate('Sketchbook')}
+              >
+                <Text style={styles.seeAll}>See All &gt;</Text>
+              </TouchableOpacity>
+            </View>
+            {recentReady && !recentFailed && recentSketches.length === 0 ? (
+              <Text style={styles.recentEmpty}>Your completed sketches will appear here.</Text>
+            ) : null}
+            {recentSketches.length > 0 ? (
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={styles.recentRow}
+              >
+                {recentSketches.map((sketch) => (
+                  <RecentSketchCard
+                    key={sketch.id}
+                    sketch={sketch}
+                    onPress={() => navigation.navigate('Reveal', revealParamsForSketch(sketch))}
+                  />
+                ))}
+              </ScrollView>
+            ) : null}
+          </View>
         </>
       )}
     </View>
@@ -599,6 +720,73 @@ const styles = StyleSheet.create({
     fontSize: 17,
     fontWeight: '700',
     color: card,
+  },
+  recent: {
+    flexShrink: 0,
+    marginTop: 20,
+  },
+  recentHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  recentTitle: {
+    fontFamily: fonts.headingBold,
+    fontSize: 17,
+    color: ink,
+  },
+  seeAll: {
+    fontFamily: fonts.headingBold,
+    fontSize: 14,
+    color: hero,
+  },
+  recentEmpty: {
+    marginTop: 12,
+    fontFamily: fonts.body,
+    fontSize: 14,
+    lineHeight: 20,
+    color: muted,
+  },
+  recentRow: {
+    gap: 12,
+    paddingTop: 12,
+    paddingBottom: 2,
+  },
+  recentCard: {
+    width: 108,
+  },
+  recentThumb: {
+    width: 108,
+    aspectRatio: 3 / 4,
+    borderRadius: layout.cardRadius,
+    borderWidth: 1,
+    borderColor: colors.stroke,
+    backgroundColor: card,
+    overflow: 'hidden',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  recentMissing: {
+    fontFamily: fonts.body,
+    fontSize: 12,
+    lineHeight: 16,
+    color: muted,
+    textAlign: 'center',
+    paddingHorizontal: 8,
+  },
+  recentDate: {
+    marginTop: 8,
+    fontFamily: fonts.body,
+    fontSize: 12,
+    lineHeight: 16,
+    color: muted,
+  },
+  recentDuration: {
+    marginTop: 2,
+    fontFamily: fonts.body,
+    fontSize: 12,
+    lineHeight: 16,
+    color: muted,
   },
   slipLayer: {
     flex: 1,

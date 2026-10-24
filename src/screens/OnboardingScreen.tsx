@@ -1,3 +1,4 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import * as Haptics from 'expo-haptics';
 import { usePostHog } from 'posthog-react-native';
@@ -25,6 +26,8 @@ import type { RootStackParamList } from '../navigation/types';
 import { isPreviewDevice } from '../runtime/previewDevice';
 import { grantPremium } from '../storage/preferences';
 import { fonts } from '../theme/colors';
+
+const ONBOARDING_COMPLETED_KEY = '@artblock_onboarding_completed';
 
 const hero = '#FF2D55';
 const ink = '#111118';
@@ -201,6 +204,15 @@ export function OnboardingScreen({ navigation }: Props) {
     void Haptics.selectionAsync().catch(() => undefined);
   };
 
+  const leaveToStudio = async () => {
+    try {
+      await AsyncStorage.setItem(ONBOARDING_COMPLETED_KEY, 'true');
+    } catch (error) {
+      console.warn('Onboarding completion was not saved.', error);
+    }
+    navigation.reset({ index: 0, routes: [{ name: 'Studio' }] });
+  };
+
   const finishPaywall = async () => {
     if (purchasing) return;
     setPurchasing(true);
@@ -208,7 +220,7 @@ export function OnboardingScreen({ navigation }: Props) {
     try {
       if (isPreviewDevice()) {
         await grantPremium();
-        navigation.reset({ index: 0, routes: [{ name: 'Studio' }] });
+        await leaveToStudio();
         return;
       }
       const productId = plan === 'weekly' ? PROD_ID_WEEKLY : PROD_ID_ANNUAL;
@@ -225,7 +237,7 @@ export function OnboardingScreen({ navigation }: Props) {
           // A placeholder key must not take the screen down.
         }
         await grantPremium();
-        navigation.reset({ index: 0, routes: [{ name: 'Studio' }] });
+        await leaveToStudio();
       } catch {
         setNotice('The purchase did not go through.');
       }
@@ -255,10 +267,6 @@ export function OnboardingScreen({ navigation }: Props) {
 
   const cardWidth = Math.min(Math.max(width - 48, 0), 440);
   const tile = Math.floor((cardWidth - 48 - 12) / 2);
-
-  const leaveToStudio = () => {
-    navigation.reset({ index: 0, routes: [{ name: 'Studio' }] });
-  };
 
   return (
     <View

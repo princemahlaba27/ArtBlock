@@ -1,24 +1,95 @@
+import { useFocusEffect } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import * as Haptics from 'expo-haptics';
 import * as Sharing from 'expo-sharing';
 import { usePostHog } from 'posthog-react-native';
-import { useState } from 'react';
-import { Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { useCallback, useRef, useState } from 'react';
+import {
+  Alert,
+  Image,
+  Linking,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Switch,
+  Text,
+  TextInput,
+  View,
+} from 'react-native';
+import type { View as ViewType } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { SvgXml } from 'react-native-svg';
 
-import { BeforeAfterSlider } from '../components/BeforeAfterSlider';
 import { PermissionPrimer } from '../components/PermissionPrimer';
 import type { RootStackParamList } from '../navigation/types';
-import { requestReviewAfterFirstTrace, saveFeedback } from '../storage/preferences';
+import { grantPremium, isPremium, requestReviewAfterFirstTrace, saveFeedback } from '../storage/preferences';
 import { formatDuration, saveSketch } from '../storage/sketchbook';
 import { buttonShadow, colors, fonts, layout, shadow } from '../theme/colors';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Reveal'>;
+type PreviewMode = 'reference' | 'photo';
+
+const PRIMARY = '#FF2D55';
+const EXPORT_BG = '#0F0F12';
+const SHEET_WIDTH = 1080;
+const SHEET_HEIGHT = 1920;
+const TIKTOK_URL = 'snssdk1233://';
+const WATERMARK = '✏️ Traced with ArtBlock';
+
+async function readProAccess(): Promise<boolean> {
+  if (Platform.OS === 'web') return isPremium();
+  try {
+    const purchases = await import('react-native-purchases');
+    const configured = await purchases.default.isConfigured();
+    if (!configured) throw new Error('Purchases is not configured');
+    const info = await purchases.default.getCustomerInfo();
+    const active = Boolean(info.entitlements.active.pro);
+    if (active) await grantPremium();
+    return active;
+  } catch {
+    return isPremium();
+  }
+}
+
+function ReferenceArt({
+  svg,
+  imageUri,
+  width,
+  height,
+}: {
+  svg: string;
+  imageUri?: string;
+  width: number;
+  height: number;
+}) {
+  if (imageUri) {
+    return (
+      <Image
+        accessibilityIgnoresInvertColors
+        source={{ uri: imageUri }}
+        style={{ width, height }}
+        resizeMode="contain"
+      />
+    );
+  }
+  if (width > 0 && height > 0 && svg) {
+    return <SvgXml xml={svg} width={width} height={height} />;
+  }
+  if (!svg) return <Text style={styles.missing}>Reference unavailable</Text>;
+  return null;
+}
 
 export function SketchRevealScreen({ navigation, route }: Props) {
   const posthog = usePostHog();
   const insets = useSafeAreaInsets();
-  const { title, svg, photoUri, seconds } = route.params;
+  const { title, photoUri, seconds } = route.params;
+  const svg = route.params.svg ?? '';
+  const referenceUri = route.params.imageUri?.trim() || undefined;
+  const slide1Ref = useRef<ViewType>(null);
+  const slide2Ref = useRef<ViewType>(null);
+  const [preview, setPreview] = useState<PreviewMode>('reference');
+  const [frame, setFrame] = useState({ width: 0, height: 0 });
   const [savedUri, setSavedUri] = useState<string | null>(null);
   const [banner, setBanner] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -30,9 +101,41 @@ export function SketchRevealScreen({ navigation, route }: Props) {
   const [feedbackSent, setFeedbackSent] = useState(false);
   const [photoPrimer, setPhotoPrimer] = useState(false);
   const [rollSaved, setRollSaved] = useState(false);
+  const [isPro, setIsPro] = useState(false);
+  const [proReady, setProReady] = useState(false);
+  const [includeBadge, setIncludeBadge] = useState(true);
 
+  const drawingDurationText = formatDuration(seconds);
   const timeLine =
-    seconds <= 0 ? 'You drew for less than a second.' : `You drew for ${formatDuration(seconds)}.`;
+    seconds <= 0 ? 'You drew for less than a second.' : `You drew for ${drawingDurationText}.`;
+  const showWatermark = isPro ? includeBadge : true;
+
+  useFocusEffect(
+    useCallback(() => {
+      let active = true;
+      void readProAccess().then((value) => {
+        if (!active) return;
+        setIsPro(value);
+        setProReady(true);
+      });
+      return () => {
+        active = false;
+      };
+    }, []),
+  );
+
+  const leaveToStudio = () => {
+    navigation.reset({ index: 0, routes: [{ name: 'Studio' }] });
+  };
+
+  const markTraceShared = () => {
+    void requestReviewAfterFirstTrace();
+    try {
+      posthog.capture('trace_completed');
+    } catch {
+      // A placeholder key must not take the screen down.
+    }
+  };
 
   const save = async () => {
     if (saving || savedUri) return;
@@ -78,15 +181,19 @@ export function SketchRevealScreen({ navigation, route }: Props) {
       setError('Saving to the camera roll works on your phone, not in the browser.');
       return;
     }
-    const MediaLibrary = require('expo-media-library');
-    const current = await MediaLibrary.getPermissionsAsync(true);
-    const next = current.granted ? current : await MediaLibrary.requestPermissionsAsync(true);
-    if (!next.granted) {
-      setError('The photo library stays closed until you allow it.');
-      return;
+    try {
+      const MediaLibrary = await import('expo-media-library/legacy');
+      const current = await MediaLibrary.getPermissionsAsync(true);
+      const next = current.granted ? current : await MediaLibrary.requestPermissionsAsync(true);
+      if (!next.granted) {
+        setError('The photo library stays closed until you allow it.');
+        return;
+      }
+      await MediaLibrary.saveToLibraryAsync(savedUri ?? photoUri);
+      setRollSaved(true);
+    } catch {
+      setError('Could not save this photo to your camera roll.');
     }
-    await MediaLibrary.saveToLibraryAsync(savedUri ?? photoUri);
-    setRollSaved(true);
   };
 
   const share = async () => {
@@ -95,22 +202,41 @@ export function SketchRevealScreen({ navigation, route }: Props) {
     setError(null);
     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined);
     try {
-      const available = await Sharing.isAvailableAsync();
-      if (!available) {
-        setError('Sharing is not available on this device.');
+      if (Platform.OS === 'web') {
+        Alert.alert('Share to TikTok', 'The TikTok carousel export runs on the phone.');
         return;
       }
-      await Sharing.shareAsync(savedUri ?? photoUri, {
-        mimeType: 'image/jpeg',
-        UTI: 'public.jpeg',
-        dialogTitle: 'Share to TikTok',
-      });
-      void requestReviewAfterFirstTrace();
-      try {
-        posthog.capture('trace_completed');
-      } catch {
-        // A placeholder key must not take the screen down.
+      const { captureRef } = await import('react-native-view-shot');
+      const slide1 = await captureRef(slide1Ref, { format: 'png', quality: 1.0 });
+      const slide2 = await captureRef(slide2Ref, { format: 'png', quality: 1.0 });
+      const MediaLibrary = await import('expo-media-library/legacy');
+      const permission = await MediaLibrary.requestPermissionsAsync();
+      if (!permission.granted) {
+        setError('Photo library access was denied, so the carousel was not saved.');
+        Alert.alert(
+          'Photos access needed',
+          'Photo library access was denied, so the carousel was not saved.',
+        );
+        return;
       }
+      await MediaLibrary.createAssetAsync(slide1);
+      await MediaLibrary.createAssetAsync(slide2);
+      Alert.alert('2 Carousel slides saved to Photos!');
+      try {
+        await Linking.openURL(TIKTOK_URL);
+      } catch {
+        const available = await Sharing.isAvailableAsync();
+        if (!available) {
+          setError('TikTok did not open, and sharing is not available on this device.');
+          return;
+        }
+        await Sharing.shareAsync(slide2, {
+          mimeType: 'image/png',
+          UTI: 'public.png',
+          dialogTitle: 'Share to TikTok',
+        });
+      }
+      markTraceShared();
     } catch {
       setError('The share sheet did not open. Try again.');
     } finally {
@@ -118,123 +244,256 @@ export function SketchRevealScreen({ navigation, route }: Props) {
     }
   };
 
+  const openUpgrade = () => {
+    navigation.navigate('Paywall', {
+      title: 'ArtBlock Pro',
+      prompts: [],
+      mode: 'single',
+    });
+  };
+
+  const choosePreview = (mode: PreviewMode) => {
+    setPreview(mode);
+    void Haptics.selectionAsync().catch(() => undefined);
+  };
+
   return (
-    <ScrollView
-      contentContainerStyle={[
-        styles.content,
-        { paddingTop: insets.top + 12, paddingBottom: Math.max(insets.bottom, 16) + 12 },
-      ]}
-      showsVerticalScrollIndicator={false}
-    >
-      <Pressable accessibilityRole="button" onPress={() => navigation.goBack()} style={styles.back}>
-        <Text style={styles.backText}>Back</Text>
-      </Pressable>
-      <Text style={styles.title}>{title}</Text>
-      <Text style={styles.time}>{timeLine}</Text>
-      <Text style={styles.help}>Drag the line to compare.</Text>
-      <BeforeAfterSlider svg={svg} photoUri={photoUri} />
-
-      {banner ? (
-        <View style={styles.banner}>
-          <Text style={styles.bannerText}>{banner}</Text>
-        </View>
-      ) : null}
-      {error ? <Text style={styles.error}>{error}</Text> : null}
-
-      <Pressable
-        accessibilityRole="button"
-        disabled={saving || Boolean(savedUri)}
-        onPress={() => void save()}
-        style={({ pressed }) => [
-          styles.primary,
-          (saving || savedUri) && styles.disabled,
-          pressed && !saving && !savedUri && styles.pressed,
+    <View style={styles.screen}>
+      <ScrollView
+        contentContainerStyle={[
+          styles.content,
+          { paddingTop: insets.top + 12, paddingBottom: Math.max(insets.bottom, 16) + 12 },
         ]}
+        showsVerticalScrollIndicator={false}
       >
-        <Text style={styles.primaryText}>
-          {savedUri ? 'Saved' : saving ? 'Saving…' : 'Save to My Sketchbook'}
-        </Text>
-      </Pressable>
-      <Pressable
-        accessibilityRole="button"
-        disabled={sharing}
-        onPress={() => void share()}
-        style={({ pressed }) => [styles.secondary, sharing && styles.disabled, pressed && !sharing && styles.pressed]}
-      >
-        <Text style={styles.secondaryText}>{sharing ? 'Opening…' : 'Share to TikTok'}</Text>
-      </Pressable>
-      {savedUri ? (
+        <Pressable accessibilityRole="button" onPress={leaveToStudio} style={styles.back}>
+          <Text style={styles.backText}>Back</Text>
+        </Pressable>
+        <Text style={styles.title}>{title}</Text>
+        <Text style={styles.time}>{timeLine}</Text>
+
+        <View style={styles.segment}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityState={{ selected: preview === 'reference' }}
+            onPress={() => choosePreview('reference')}
+            style={[styles.segmentItem, preview === 'reference' && styles.segmentOn]}
+          >
+            <Text style={[styles.segmentText, preview === 'reference' && styles.segmentTextOn]}>Reference</Text>
+          </Pressable>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityState={{ selected: preview === 'photo' }}
+            onPress={() => choosePreview('photo')}
+            style={[styles.segmentItem, preview === 'photo' && styles.segmentOn]}
+          >
+            <Text style={[styles.segmentText, preview === 'photo' && styles.segmentTextOn]}>Your photo</Text>
+          </Pressable>
+        </View>
+
+        <View
+          style={styles.preview}
+          onLayout={(event) => {
+            const nextWidth = event.nativeEvent.layout.width;
+            const nextHeight = event.nativeEvent.layout.height;
+            setFrame((current) =>
+              current.width === nextWidth && current.height === nextHeight
+                ? current
+                : { width: nextWidth, height: nextHeight },
+            );
+          }}
+        >
+          {preview === 'reference' ? (
+            <ReferenceArt svg={svg} imageUri={referenceUri} width={frame.width} height={frame.height} />
+          ) : (
+            <Image
+              accessibilityIgnoresInvertColors
+              source={{ uri: photoUri }}
+              style={{ width: frame.width, height: frame.height }}
+              resizeMode="contain"
+            />
+          )}
+        </View>
+
+        {banner ? (
+          <View style={styles.banner}>
+            <Text style={styles.bannerText}>{banner}</Text>
+          </View>
+        ) : null}
+        {error ? <Text style={styles.error}>{error}</Text> : null}
+
         <Pressable
           accessibilityRole="button"
-          onPress={() => setPhotoPrimer(true)}
-          style={({ pressed }) => [styles.secondary, pressed && styles.pressed]}
+          disabled={saving || Boolean(savedUri)}
+          onPress={() => void save()}
+          style={({ pressed }) => [
+            styles.primary,
+            (saving || savedUri) && styles.disabled,
+            pressed && !saving && !savedUri && styles.pressed,
+          ]}
         >
-          <Text style={styles.secondaryText}>
-            {rollSaved ? 'Saved to camera roll' : 'Save to Camera Roll'}
+          <Text style={styles.primaryText}>
+            {savedUri ? 'Saved' : saving ? 'Saving…' : 'Save to My Sketchbook'}
           </Text>
         </Pressable>
-      ) : null}
-      {savedUri ? (
+
+        {isPro ? (
+          <View style={styles.badgeRow}>
+            <Text style={styles.badgeLabel}>Include "Traced with ArtBlock" badge</Text>
+            <Switch
+              value={includeBadge}
+              onValueChange={(next) => {
+                setIncludeBadge(next);
+                void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined);
+              }}
+              trackColor={{ false: '#D1D1D6', true: PRIMARY }}
+              thumbColor={colors.white}
+              accessibilityLabel='Include "Traced with ArtBlock" badge'
+            />
+          </View>
+        ) : null}
+
         <Pressable
           accessibilityRole="button"
-          onPress={() =>
-            navigation.reset({
-              index: 1,
-              routes: [{ name: 'Studio' }, { name: 'Sketchbook' }],
-            })
-          }
-          style={({ pressed }) => [styles.link, pressed && styles.pressed]}
+          disabled={sharing}
+          onPress={() => void share()}
+          style={({ pressed }) => [styles.secondary, sharing && styles.disabled, pressed && !sharing && styles.pressed]}
         >
-          <Text style={styles.linkText}>See My Sketchbook</Text>
+          <Text style={styles.secondaryText}>{sharing ? 'Opening…' : 'Share to TikTok'}</Text>
         </Pressable>
-      ) : null}
+        {proReady && !isPro ? (
+          <Pressable accessibilityRole="button" onPress={openUpgrade} style={styles.watermarkNote}>
+            <Text style={styles.watermarkNoteText}>Watermark included • Tap to remove with Pro</Text>
+          </Pressable>
+        ) : null}
 
-      {askReview ? (
-        <View style={styles.banner}>
-          <Text style={styles.bannerText}>How did your first physical trace turn out?</Text>
-          <View style={styles.stars}>
-            {[1, 2, 3, 4, 5].map((value) => (
-              <Pressable key={value} accessibilityRole="button" onPress={() => void rate(value)}>
-                <Text style={[styles.star, value <= stars && styles.starOn]}>{value <= stars ? '★' : '☆'}</Text>
-              </Pressable>
-            ))}
+        {savedUri ? (
+          <Pressable
+            accessibilityRole="button"
+            onPress={() => setPhotoPrimer(true)}
+            style={({ pressed }) => [styles.secondary, pressed && styles.pressed]}
+          >
+            <Text style={styles.secondaryText}>{rollSaved ? 'Saved to camera roll' : 'Save to Camera Roll'}</Text>
+          </Pressable>
+        ) : null}
+        {savedUri ? (
+          <Pressable
+            accessibilityRole="button"
+            onPress={() =>
+              navigation.reset({
+                index: 1,
+                routes: [{ name: 'Studio' }, { name: 'Sketchbook' }],
+              })
+            }
+            style={({ pressed }) => [styles.link, pressed && styles.pressed]}
+          >
+            <Text style={styles.linkText}>See My Sketchbook</Text>
+          </Pressable>
+        ) : null}
+
+        {askReview ? (
+          <View style={styles.banner}>
+            <Text style={styles.bannerText}>How did your first physical trace turn out?</Text>
+            <View style={styles.stars}>
+              {[1, 2, 3, 4, 5].map((value) => (
+                <Pressable key={value} accessibilityRole="button" onPress={() => void rate(value)}>
+                  <Text style={[styles.star, value <= stars && styles.starOn]}>{value <= stars ? '★' : '☆'}</Text>
+                </Pressable>
+              ))}
+            </View>
+            {stars > 0 && stars < 5 ? (
+              <>
+                <Text style={styles.help}>What can we make easier?</Text>
+                <TextInput
+                  value={feedback}
+                  onChangeText={setFeedback}
+                  placeholder="Tell us in a sentence"
+                  placeholderTextColor={colors.muted}
+                  style={styles.input}
+                  multiline
+                />
+                <Pressable
+                  accessibilityRole="button"
+                  onPress={() => void sendFeedback()}
+                  style={({ pressed }) => [styles.primary, pressed && styles.pressed]}
+                >
+                  <Text style={styles.primaryText}>Send</Text>
+                </Pressable>
+              </>
+            ) : null}
           </View>
-          {stars > 0 && stars < 5 ? (
-            <>
-              <Text style={styles.help}>What can we make easier?</Text>
-              <TextInput
-                value={feedback}
-                onChangeText={setFeedback}
-                placeholder="Tell us in a sentence"
-                placeholderTextColor={colors.muted}
-                style={styles.input}
-                multiline
-              />
-              <Pressable
-                accessibilityRole="button"
-                onPress={() => void sendFeedback()}
-                style={({ pressed }) => [styles.primary, pressed && styles.pressed]}
-              >
-                <Text style={styles.primaryText}>Send</Text>
-              </Pressable>
-            </>
-          ) : null}
+        ) : null}
+        {feedbackSent ? <Text style={styles.help}>Thanks. We’ll use that.</Text> : null}
+        <PermissionPrimer
+          visible={photoPrimer}
+          title="Save to your camera roll"
+          body="ArtBlock puts this photo in your camera roll only when you ask."
+          confirmLabel="Continue"
+          onConfirm={() => void saveToRoll()}
+          onDismiss={() => setPhotoPrimer(false)}
+        />
+      </ScrollView>
+
+      <View
+        ref={slide1Ref}
+        collapsable={false}
+        pointerEvents="none"
+        style={styles.sheet}
+        accessibilityElementsHidden
+        importantForAccessibility="no-hide-descendants"
+      >
+        <View style={styles.capsule}>
+          <Text style={styles.capsuleText} numberOfLines={1} adjustsFontSizeToFit>
+            THE REFERENCE
+          </Text>
         </View>
-      ) : null}
-      {feedbackSent ? <Text style={styles.help}>Thanks. We’ll use that.</Text> : null}
-      <PermissionPrimer
-        visible={photoPrimer}
-        title="Save to your camera roll"
-        body="ArtBlock puts this photo in your camera roll only when you ask."
-        confirmLabel="Continue"
-        onConfirm={() => void saveToRoll()}
-        onDismiss={() => setPhotoPrimer(false)}
-      />
-    </ScrollView>
+        <View style={styles.exportCard}>
+          <ReferenceArt svg={svg} imageUri={referenceUri} width={880} height={1180} />
+        </View>
+        {showWatermark ? (
+          <View style={styles.frost}>
+            <Text style={styles.frostText}>{WATERMARK}</Text>
+          </View>
+        ) : null}
+      </View>
+
+      <View
+        ref={slide2Ref}
+        collapsable={false}
+        pointerEvents="none"
+        style={[styles.sheet, styles.sheetSecond]}
+        accessibilityElementsHidden
+        importantForAccessibility="no-hide-descendants"
+      >
+        <View style={styles.capsule}>
+          <Text style={styles.capsuleText} numberOfLines={1} adjustsFontSizeToFit>
+            {`TRACED WITH AR • ${drawingDurationText}`}
+          </Text>
+        </View>
+        <View style={styles.exportCard}>
+          <Image
+            accessibilityIgnoresInvertColors
+            source={{ uri: photoUri }}
+            style={styles.exportArt}
+            resizeMode="contain"
+          />
+        </View>
+        {showWatermark ? (
+          <View style={styles.frost}>
+            <Text style={styles.frostText}>{WATERMARK}</Text>
+          </View>
+        ) : null}
+      </View>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
+  screen: {
+    flex: 1,
+    backgroundColor: colors.canvas,
+    overflow: 'visible',
+  },
   content: {
     paddingHorizontal: 16,
     backgroundColor: colors.canvas,
@@ -244,7 +503,7 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
   },
   backText: {
-    color: colors.brand,
+    color: PRIMARY,
     fontFamily: fonts.headingBold,
     fontSize: 16,
   },
@@ -262,6 +521,47 @@ const styles = StyleSheet.create({
     fontSize: 15,
     lineHeight: 22,
     color: colors.muted,
+  },
+  segment: {
+    marginTop: 16,
+    flexDirection: 'row',
+    padding: 4,
+    borderRadius: 28,
+    backgroundColor: colors.card,
+    ...shadow,
+  },
+  segmentItem: {
+    flex: 1,
+    height: 40,
+    borderRadius: 22,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  segmentOn: {
+    backgroundColor: PRIMARY,
+  },
+  segmentText: {
+    color: colors.ink,
+    fontFamily: fonts.headingBold,
+    fontSize: 14,
+  },
+  segmentTextOn: {
+    color: colors.white,
+  },
+  preview: {
+    marginTop: 12,
+    height: 440,
+    borderRadius: layout.cardRadius,
+    overflow: 'hidden',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.card,
+    ...shadow,
+  },
+  missing: {
+    color: colors.muted,
+    fontFamily: fonts.bodyMedium,
+    fontSize: 15,
   },
   help: {
     marginTop: 14,
@@ -293,7 +593,7 @@ const styles = StyleSheet.create({
     color: colors.muted,
   },
   starOn: {
-    color: colors.brand,
+    color: PRIMARY,
   },
   input: {
     marginTop: 8,
@@ -315,22 +615,41 @@ const styles = StyleSheet.create({
   },
   primary: {
     marginTop: 16,
-    height: layout.pillHeight,
-    borderRadius: layout.pillRadius,
-    backgroundColor: colors.brand,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: PRIMARY,
     alignItems: 'center',
     justifyContent: 'center',
     ...buttonShadow,
+    shadowColor: PRIMARY,
   },
   primaryText: {
     color: colors.white,
     fontFamily: fonts.headingBold,
     fontSize: 16,
   },
+  badgeRow: {
+    marginTop: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    backgroundColor: colors.card,
+    borderRadius: 20,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    ...shadow,
+  },
+  badgeLabel: {
+    flex: 1,
+    color: colors.ink,
+    fontFamily: fonts.bodyMedium,
+    fontSize: 15,
+    lineHeight: 20,
+  },
   secondary: {
     marginTop: 12,
-    height: layout.pillHeight,
-    borderRadius: layout.pillRadius,
+    height: 56,
+    borderRadius: 28,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: colors.card,
@@ -341,6 +660,18 @@ const styles = StyleSheet.create({
     fontFamily: fonts.headingBold,
     fontSize: 16,
   },
+  watermarkNote: {
+    marginTop: 10,
+    paddingVertical: 4,
+    alignItems: 'center',
+  },
+  watermarkNoteText: {
+    color: PRIMARY,
+    fontFamily: fonts.bodyMedium,
+    fontSize: 13,
+    lineHeight: 18,
+    textAlign: 'center',
+  },
   link: {
     marginTop: 8,
     height: 44,
@@ -348,7 +679,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   linkText: {
-    color: colors.brand,
+    color: PRIMARY,
     fontFamily: fonts.headingBold,
     fontSize: 16,
   },
@@ -357,5 +688,72 @@ const styles = StyleSheet.create({
   },
   pressed: {
     transform: [{ scale: 0.97 }],
+  },
+  sheet: {
+    position: 'absolute',
+    left: -4000,
+    top: 0,
+    width: SHEET_WIDTH,
+    height: SHEET_HEIGHT,
+    backgroundColor: EXPORT_BG,
+  },
+  sheetSecond: {
+    left: -5200,
+  },
+  capsule: {
+    alignSelf: 'center',
+    marginTop: 72,
+    maxWidth: 960,
+    paddingHorizontal: 28,
+    paddingVertical: 16,
+    borderRadius: 999,
+    backgroundColor: 'rgba(255,255,255,0.1)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.22)',
+  },
+  capsuleText: {
+    color: colors.white,
+    fontFamily: fonts.headingBold,
+    fontSize: 28,
+    letterSpacing: 1.4,
+    textAlign: 'center',
+  },
+  exportCard: {
+    alignSelf: 'center',
+    marginTop: 36,
+    width: 952,
+    height: 1360,
+    borderRadius: 40,
+    backgroundColor: colors.white,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.7)',
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 18 },
+    shadowOpacity: 0.4,
+    shadowRadius: 28,
+    elevation: 16,
+    overflow: 'hidden',
+  },
+  exportArt: {
+    width: 880,
+    height: 1180,
+  },
+  frost: {
+    position: 'absolute',
+    left: 56,
+    bottom: 64,
+    paddingHorizontal: 22,
+    paddingVertical: 14,
+    borderRadius: 999,
+    backgroundColor: 'rgba(255,255,255,0.2)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.38)',
+  },
+  frostText: {
+    color: colors.white,
+    fontFamily: fonts.headingBold,
+    fontSize: 26,
   },
 });

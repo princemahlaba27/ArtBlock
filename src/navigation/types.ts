@@ -14,9 +14,12 @@ export type PaywallParams = DeckParams & {
 
 export type RevealParams = {
   title: string;
-  svg: string;
+  /** Line-art stencil from a live trace. Omitted when a saved sketch has no stencil. */
+  svg?: string;
   photoUri: string;
   seconds: number;
+  /** Original reference photo or line-art image, when one was stored with the trace. */
+  imageUri?: string;
 };
 
 export type RootStackParamList = {

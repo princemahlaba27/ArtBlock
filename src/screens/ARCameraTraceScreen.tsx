@@ -254,7 +254,16 @@ export function ARCameraTraceScreen({ navigation, route }: Props) {
         index: 1,
         routes: [
           { name: 'Studio' },
-          { name: 'Reveal', params: { title: route.params.title, svg, photoUri, seconds } },
+          {
+            name: 'Reveal',
+            params: {
+              title: route.params.title,
+              svg,
+              photoUri,
+              seconds,
+              imageUri: route.params.imageUri,
+            },
+          },
         ],
       });
     };

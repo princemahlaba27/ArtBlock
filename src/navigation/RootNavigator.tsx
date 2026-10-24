@@ -1,3 +1,4 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   NavigationContainer,
   DefaultTheme,
@@ -5,7 +6,8 @@ import {
 } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { StatusBar } from 'expo-status-bar';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { ActivityIndicator, StyleSheet, View } from 'react-native';
 
 import type { RootStackParamList } from './types';
 import { ARCameraTraceScreen } from '../screens/ARCameraTraceScreen';
@@ -17,6 +19,8 @@ import { SketchRevealScreen } from '../screens/SketchRevealScreen';
 import { InstantStudioScreen } from '../screens/InstantStudioScreen';
 import { SettingsScreen } from '../screens/SettingsScreen';
 import { colors, fonts } from '../theme/colors';
+
+const ONBOARDING_COMPLETED_KEY = '@artblock_onboarding_completed';
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 
@@ -49,12 +53,42 @@ function isRouteName(name: string | undefined): name is keyof RootStackParamList
 
 export default function RootNavigator() {
   const navigationRef = useNavigationContainerRef<RootStackParamList>();
+  const [initialRoute, setInitialRoute] = useState<keyof RootStackParamList | null>(null);
   const [routeName, setRouteName] = useState<keyof RootStackParamList>('Welcome');
+
+  useEffect(() => {
+    let active = true;
+    AsyncStorage.getItem(ONBOARDING_COMPLETED_KEY)
+      .then((value) => {
+        if (!active) return;
+        const next: keyof RootStackParamList = value === 'true' ? 'Studio' : 'Welcome';
+        setRouteName(next);
+        setInitialRoute(next);
+      })
+      .catch((error: unknown) => {
+        console.warn('Onboarding flag could not be read.', error);
+        if (!active) return;
+        setRouteName('Welcome');
+        setInitialRoute('Welcome');
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   const syncRoute = () => {
     const name = navigationRef.getCurrentRoute()?.name;
     if (isRouteName(name)) setRouteName(name);
   };
+
+  if (initialRoute === null) {
+    return (
+      <View style={styles.boot}>
+        <StatusBar style="dark" />
+        <ActivityIndicator color={colors.brand} />
+      </View>
+    );
+  }
 
   const lightStatus =
     routeName === 'Welcome' || routeName === 'Paywall' || routeName === 'Trace';
@@ -63,7 +97,7 @@ export default function RootNavigator() {
     <NavigationContainer ref={navigationRef} theme={theme} onReady={syncRoute} onStateChange={syncRoute}>
       <StatusBar style={lightStatus ? 'light' : 'dark'} />
       <Stack.Navigator
-        initialRouteName="Welcome"
+        initialRouteName={initialRoute}
         screenOptions={{
           headerStyle: { backgroundColor: colors.canvas },
           headerTintColor: colors.ink,
@@ -104,3 +138,12 @@ export default function RootNavigator() {
     </NavigationContainer>
   );
 }
+
+const styles = StyleSheet.create({
+  boot: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.canvas,
+  },
+});

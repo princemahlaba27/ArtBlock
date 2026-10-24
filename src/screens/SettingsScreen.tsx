@@ -1,3 +1,4 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import Ionicons from '@expo/vector-icons/Ionicons';
@@ -10,6 +11,8 @@ import { PRIVACY_URL, TERMS_URL } from '../constants/Legal';
 import type { RootStackParamList } from '../navigation/types';
 import { grantPremium, isPremium } from '../storage/preferences';
 import { fonts } from '../theme/colors';
+
+const ONBOARDING_COMPLETED_KEY = '@artblock_onboarding_completed';
 
 const paper = '#F8F9FD';
 const hero = '#FF2D55';
@@ -35,8 +38,9 @@ const ACCOUNT_ROWS: { icon: IonName; label: string; action: 'restore' | 'rate' }
   { icon: 'star', label: 'Rate on App Store', action: 'rate' },
 ];
 
-const HELP_ROWS: { icon: IonName; label: string; action: 'feature' }[] = [
+const HELP_ROWS: { icon: IonName; label: string; action: 'feature' | 'reset-onboarding' }[] = [
   { icon: 'bulb', label: 'Request a Feature', action: 'feature' },
+  { icon: 'reload', label: 'Reset Onboarding', action: 'reset-onboarding' },
 ];
 
 const LEGAL_ROWS: { icon: IonName; label: string; action: 'privacy' | 'terms' }[] = [
@@ -128,6 +132,17 @@ export function SettingsScreen({ navigation }: Props) {
     }
   };
 
+  const resetOnboarding = async () => {
+    setNotice(null);
+    try {
+      await AsyncStorage.removeItem(ONBOARDING_COMPLETED_KEY);
+      Alert.alert('Onboarding reset', 'The next launch will show onboarding again.');
+    } catch (error) {
+      console.warn('Onboarding could not be reset.', error);
+      setNotice('Onboarding could not be reset.');
+    }
+  };
+
   const requestFeature = async () => {
     setNotice(null);
     try {
@@ -153,6 +168,10 @@ export function SettingsScreen({ navigation }: Props) {
     }
     if (action === 'feature') {
       void requestFeature();
+      return;
+    }
+    if (action === 'reset-onboarding') {
+      void resetOnboarding();
       return;
     }
     if (action === 'privacy') {
