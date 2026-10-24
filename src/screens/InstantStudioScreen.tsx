@@ -31,14 +31,66 @@ const premiumShadow = {
   elevation: 3,
 } as const;
 
-const PROMPTS = [
-  'Aesthetic anime eye sketch',
-  'Y2K tattoo stencil',
-  'Simple Marvel character drawing',
-  'Minimalist butterfly line art',
-  'Coquette bow doodle',
-  'Dark grunge skull sketch',
+type DrawingIdea = {
+  title: string;
+  category?: string;
+  difficulty?: 'Easy' | 'Medium' | 'Hard';
+};
+
+const EXISTING_IDEAS: DrawingIdea[] = [
+  { title: 'Aesthetic anime eye sketch' },
+  { title: 'Y2K tattoo stencil' },
+  { title: 'Simple Marvel character drawing' },
+  { title: 'Minimalist butterfly line art' },
+  { title: 'Coquette bow doodle' },
+  { title: 'Dark grunge skull sketch' },
 ];
+
+const VIRAL_DRAWING_IDEAS: DrawingIdea[] = [
+  { title: 'Flowing twin koi fish', category: 'sea creatures', difficulty: 'Medium' },
+  { title: 'Great white shark sketch', category: 'sea creatures', difficulty: 'Medium' },
+  { title: 'Sea turtle shell outline', category: 'sea creatures', difficulty: 'Easy' },
+  { title: 'Deep sea jellyfish tentacles', category: 'sea creatures', difficulty: 'Easy' },
+  { title: 'Interlocking hands study', category: 'hands', difficulty: 'Hard' },
+  { title: 'Reaching fingertips perspective', category: 'hands', difficulty: 'Hard' },
+  { title: 'Hand holding acoustic guitar fret', category: 'hands', difficulty: 'Medium' },
+  { title: 'Minimalist pinky promise gesture', category: 'hands', difficulty: 'Easy' },
+  { title: 'Tangled wired earphones', category: 'randoms', difficulty: 'Easy' },
+  { title: 'Retro click-wheel MP3 player', category: 'randoms', difficulty: 'Easy' },
+  { title: 'Piano keys lace edge border', category: 'randoms', difficulty: 'Medium' },
+  { title: 'Starfish & doodle sparkles', category: 'randoms', difficulty: 'Easy' },
+  { title: 'Cherry blossom branch cascade', category: 'flowers', difficulty: 'Medium' },
+  { title: 'Detailed tiger lily stem', category: 'flowers', difficulty: 'Medium' },
+  { title: 'Wildflower outline cluster', category: 'flowers', difficulty: 'Easy' },
+  { title: 'Doodle vine with ladybug', category: 'nature', difficulty: 'Easy' },
+  { title: 'Steaming vintage teacup', category: 'classic', difficulty: 'Easy' },
+  { title: 'Antique phonograph horn', category: 'classic', difficulty: 'Medium' },
+  { title: 'Fairytale mushroom cottage', category: 'classic', difficulty: 'Easy' },
+  { title: 'Dragonfly with cosmic stardust', category: 'nature', difficulty: 'Easy' },
+  { title: 'Anime hypnotic spiral iris', category: 'eyes', difficulty: 'Medium' },
+  { title: 'Soft eyelash pencil study', category: 'eyes', difficulty: 'Medium' },
+  { title: 'Dramatic shaded gaze', category: 'eyes', difficulty: 'Hard' },
+  { title: 'Fox listening to tiny bird', category: 'animals', difficulty: 'Medium' },
+  { title: 'Playful puppy head tilt', category: 'animals', difficulty: 'Easy' },
+  { title: 'Stretching kitten yawn', category: 'animals', difficulty: 'Medium' },
+  { title: 'Graceful origami-style swan', category: 'animals', difficulty: 'Easy' },
+];
+
+const EXISTING_TITLES = new Set(EXISTING_IDEAS.map((idea) => idea.title));
+
+const PROMPTS: DrawingIdea[] = [
+  ...EXISTING_IDEAS,
+  ...VIRAL_DRAWING_IDEAS.filter((idea) => !EXISTING_TITLES.has(idea.title)),
+];
+
+function titleCaseCategory(category: string): string {
+  return category.charAt(0).toUpperCase() + category.slice(1);
+}
+
+function ideaRibbonTitle(idea: DrawingIdea): string {
+  if (!idea.category) return idea.title;
+  return `${titleCaseCategory(idea.category)}: ${idea.title}`;
+}
 
 type CameraPermissionApi = {
   getPermissionsAsync?: () => Promise<{ granted: boolean }>;
@@ -173,7 +225,8 @@ export function InstantStudioScreen({ navigation }: Props) {
   const [recentFailed, setRecentFailed] = useState(false);
   const imageUriRef = useRef<string | null>(null);
   const handlePasteRef = useRef<(quiet?: boolean) => Promise<void>>(async () => undefined);
-  const prompt = PROMPTS[promptIndex] ?? PROMPTS[0];
+  const idea = PROMPTS[promptIndex] ?? PROMPTS[0];
+  const prompt = idea.title;
 
   const reroll = () => {
     void Haptics.selectionAsync().catch(() => undefined);
@@ -485,10 +538,19 @@ export function InstantStudioScreen({ navigation }: Props) {
           <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
           <View style={styles.ribbon}>
             <View style={styles.ribbonCopy}>
-              <Text style={styles.ideaLabel}>IDEA</Text>
-              <Text style={styles.ideaText} numberOfLines={1} ellipsizeMode="tail">
-                {prompt}
-              </Text>
+              {idea.category ? (
+                <Text style={styles.ideaText} numberOfLines={2} ellipsizeMode="tail">
+                  <Text style={styles.ideaLabel}>IDEA • </Text>
+                  {ideaRibbonTitle(idea)}
+                </Text>
+              ) : (
+                <>
+                  <Text style={styles.ideaLabel}>IDEA</Text>
+                  <Text style={styles.ideaText} numberOfLines={1} ellipsizeMode="tail">
+                    {idea.title}
+                  </Text>
+                </>
+              )}
             </View>
             <TouchableOpacity accessibilityRole="button" accessibilityLabel="Roll" onPress={reroll} style={styles.roll}>
               <Text style={styles.rollDice}>🎲</Text>
