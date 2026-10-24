@@ -4,14 +4,11 @@
   },
   "build": {
     "production": {
-      "ios": {
-        "simulator": false
-      }
+      "channel": "production",
+      "autoIncrement": true
     }
   },
   "submit": {
-    "production": {
-      "ios": {}
-    }
+    "production": {}
   }
 }
