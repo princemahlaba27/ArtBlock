@@ -437,65 +437,67 @@ export function ARCameraTraceScreen({ navigation, route }: Props) {
           </View>
         </View>
 
-        <View style={[styles.dock, { marginBottom: Math.max(insets.bottom, 16) }]}>
-          {linesPending ? <Text style={styles.hint}>Preparing lines…</Text> : null}
-          {capturing ? <Text style={styles.hint}>Taking the photo…</Text> : null}
-          {error ? <Text style={styles.error}>{error}</Text> : null}
-          <Text style={styles.hint}>
-            {isLocked
-              ? 'Lines are locked. Draw on your paper.'
-              : 'Pinch, turn, or drag the lines. Then lock them.'}
-          </Text>
-          <View style={styles.modes}>
-            {TRACE_MODES.map((mode) => {
-              const selected = lineMode === mode.id;
-              return (
-                <Pressable
-                  key={mode.id}
-                  accessibilityRole="button"
-                  accessibilityLabel={mode.label}
-                  accessibilityState={{ selected }}
-                  onPress={() => {
-                    void Haptics.selectionAsync().catch(() => undefined);
-                    setLineMode(mode.id);
-                  }}
-                  style={[styles.mode, selected && styles.modeOn]}
-                >
-                  <Text style={styles.modeText}>{mode.label}</Text>
-                </Pressable>
-              );
-            })}
-          </View>
-          <View style={styles.sliderRow}>
-            <Text style={styles.sliderLabel}>Lines</Text>
-            <Slider
-              style={styles.slider}
-              minimumValue={0.1}
-              maximumValue={0.85}
-              value={opacity}
-              onValueChange={setOpacity}
-              minimumTrackTintColor={colors.brand}
-              maximumTrackTintColor={colors.stroke}
-              thumbTintColor={colors.canvas}
-              accessibilityLabel="Line opacity"
-            />
-            <Text style={styles.percent}>{Math.round(opacity * 100)}%</Text>
-          </View>
-          <Pressable
-            accessibilityRole="button"
-            disabled={!readyToFinish || capturing || celebrating}
-            onPress={() => void finish()}
-            style={({ pressed }) => [
-              styles.finish,
-              (!readyToFinish || capturing || celebrating) && styles.disabled,
-              pressed && readyToFinish && !capturing && !celebrating && styles.pressed,
-            ]}
-          >
-            <Text style={styles.finishText}>
-              {readyToFinish ? 'Finish Drawing' : 'Starting camera…'}
+        {!celebrating ? (
+          <View style={[styles.dock, { marginBottom: Math.max(insets.bottom, 16) }]}>
+            {linesPending ? <Text style={styles.hint}>Preparing lines…</Text> : null}
+            {capturing ? <Text style={styles.hint}>Taking the photo…</Text> : null}
+            {error ? <Text style={styles.error}>{error}</Text> : null}
+            <Text style={styles.hint}>
+              {isLocked
+                ? 'Lines are locked. Draw on your paper.'
+                : 'Pinch, turn, or drag the lines. Then lock them.'}
             </Text>
-          </Pressable>
-        </View>
+            <View style={styles.modes}>
+              {TRACE_MODES.map((mode) => {
+                const selected = lineMode === mode.id;
+                return (
+                  <Pressable
+                    key={mode.id}
+                    accessibilityRole="button"
+                    accessibilityLabel={mode.label}
+                    accessibilityState={{ selected }}
+                    onPress={() => {
+                      void Haptics.selectionAsync().catch(() => undefined);
+                      setLineMode(mode.id);
+                    }}
+                    style={[styles.mode, selected && styles.modeOn]}
+                  >
+                    <Text style={styles.modeText}>{mode.label}</Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+            <View style={styles.sliderRow}>
+              <Text style={styles.sliderLabel}>Lines</Text>
+              <Slider
+                style={styles.slider}
+                minimumValue={0.1}
+                maximumValue={0.85}
+                value={opacity}
+                onValueChange={setOpacity}
+                minimumTrackTintColor={colors.brand}
+                maximumTrackTintColor={colors.stroke}
+                thumbTintColor={colors.canvas}
+                accessibilityLabel="Line opacity"
+              />
+              <Text style={styles.percent}>{Math.round(opacity * 100)}%</Text>
+            </View>
+            <Pressable
+              accessibilityRole="button"
+              disabled={!readyToFinish || capturing || celebrating}
+              onPress={() => void finish()}
+              style={({ pressed }) => [
+                styles.finish,
+                (!readyToFinish || capturing || celebrating) && styles.disabled,
+                pressed && readyToFinish && !capturing && !celebrating && styles.pressed,
+              ]}
+            >
+              <Text style={styles.finishText}>
+                {readyToFinish ? 'Finish Drawing' : 'Starting camera…'}
+              </Text>
+            </Pressable>
+          </View>
+        ) : null}
       </View>
 
       {celebrating ? (
@@ -703,9 +705,11 @@ const styles = StyleSheet.create({
   },
   celebrateWrap: {
     ...StyleSheet.absoluteFill,
+    zIndex: 999,
+    elevation: 10,
     justifyContent: 'flex-end',
     padding: 16,
-    backgroundColor: 'rgba(30, 30, 36, 0.28)',
+    backgroundColor: 'rgba(0,0,0,0.45)',
   },
   celebrateCard: {
     backgroundColor: colors.card,
