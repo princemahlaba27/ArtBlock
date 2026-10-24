@@ -51,12 +51,6 @@
       ],
       "expo-sharing",
       [
-        "expo-tracking-transparency",
-        {
-          "userTrackingPermission": "This helps ArtBlock suggest drawing ideas and keep free sketch pages up to date."
-        }
-      ],
-      [
         "expo-media-library",
         {
           "photosPermission": "ArtBlock needs access to your photo library to let you select reference art to trace and save your completed sketches.",
