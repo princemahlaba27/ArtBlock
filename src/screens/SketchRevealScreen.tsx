@@ -1,5 +1,6 @@
 import { useFocusEffect } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import * as Haptics from 'expo-haptics';
 import * as Sharing from 'expo-sharing';
 import { usePostHog } from 'posthog-react-native';
@@ -7,7 +8,6 @@ import { useCallback, useRef, useState } from 'react';
 import {
   Alert,
   Image,
-  Linking,
   Platform,
   Pressable,
   ScrollView,
@@ -23,8 +23,8 @@ import { SvgXml } from 'react-native-svg';
 
 import { PermissionPrimer } from '../components/PermissionPrimer';
 import type { RootStackParamList } from '../navigation/types';
-import { grantPremium, isPremium, requestReviewAfterFirstTrace, saveFeedback } from '../storage/preferences';
-import { formatDuration, saveSketch } from '../storage/sketchbook';
+import { isPremium, requestReviewAfterFirstTrace, saveFeedback } from '../storage/preferences';
+import { deleteSketch, formatDuration, saveSketch } from '../storage/sketchbook';
 import { buttonShadow, colors, fonts, layout, shadow } from '../theme/colors';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Reveal'>;
@@ -34,23 +34,7 @@ const PRIMARY = '#FF2D55';
 const EXPORT_BG = '#0F0F12';
 const SHEET_WIDTH = 1080;
 const SHEET_HEIGHT = 1920;
-const TIKTOK_URL = 'snssdk1233://';
 const WATERMARK = '✏️ Traced with ArtBlock';
-
-async function readProAccess(): Promise<boolean> {
-  if (Platform.OS === 'web') return isPremium();
-  try {
-    const purchases = await import('react-native-purchases');
-    const configured = await purchases.default.isConfigured();
-    if (!configured) throw new Error('Purchases is not configured');
-    const info = await purchases.default.getCustomerInfo();
-    const active = Boolean(info.entitlements.active.pro);
-    if (active) await grantPremium();
-    return active;
-  } catch {
-    return isPremium();
-  }
-}
 
 function ReferenceArt({
   svg,
@@ -83,9 +67,11 @@ function ReferenceArt({
 export function SketchRevealScreen({ navigation, route }: Props) {
   const posthog = usePostHog();
   const insets = useSafeAreaInsets();
-  const { title, photoUri, seconds } = route.params;
+  const { title, photoUri } = route.params;
+  const [sketchId, setSketchId] = useState(route.params.id?.trim() || undefined);
+  const seconds = route.params.duration ?? route.params.seconds ?? 0;
   const svg = route.params.svg ?? '';
-  const referenceUri = route.params.imageUri?.trim() || undefined;
+  const referenceUri = route.params.referenceUri?.trim() || route.params.imageUri?.trim() || undefined;
   const slide1Ref = useRef<ViewType>(null);
   const slide2Ref = useRef<ViewType>(null);
   const [preview, setPreview] = useState<PreviewMode>('reference');
@@ -104,6 +90,8 @@ export function SketchRevealScreen({ navigation, route }: Props) {
   const [isPro, setIsPro] = useState(false);
   const [proReady, setProReady] = useState(false);
   const [includeBadge, setIncludeBadge] = useState(true);
+  const [deleteAsk, setDeleteAsk] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   const drawingDurationText = formatDuration(seconds);
   const timeLine =
@@ -113,11 +101,16 @@ export function SketchRevealScreen({ navigation, route }: Props) {
   useFocusEffect(
     useCallback(() => {
       let active = true;
-      void readProAccess().then((value) => {
-        if (!active) return;
-        setIsPro(value);
-        setProReady(true);
-      });
+      void isPremium()
+        .then((value) => {
+          if (active) setIsPro(value);
+        })
+        .catch(() => {
+          if (active) setIsPro(false);
+        })
+        .finally(() => {
+          if (active) setProReady(true);
+        });
       return () => {
         active = false;
       };
@@ -126,6 +119,33 @@ export function SketchRevealScreen({ navigation, route }: Props) {
 
   const leaveToStudio = () => {
     navigation.reset({ index: 0, routes: [{ name: 'Studio' }] });
+  };
+
+  const removeSavedSketch = async () => {
+    if (!sketchId || deleting) return;
+    setDeleteAsk(false);
+    setDeleting(true);
+    setError(null);
+    try {
+      await deleteSketch(sketchId);
+      navigation.goBack();
+    } catch {
+      setError('Could not delete this sketch.');
+      setDeleting(false);
+    }
+  };
+
+  const confirmDelete = () => {
+    if (!sketchId) return;
+    void Haptics.selectionAsync().catch(() => undefined);
+    if (Platform.OS === 'web') {
+      setDeleteAsk(true);
+      return;
+    }
+    Alert.alert('Delete Sketch', 'Are you sure you want to permanently delete this sketch?', [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Delete', style: 'destructive', onPress: () => void removeSavedSketch() },
+    ]);
   };
 
   const markTraceShared = () => {
@@ -143,7 +163,13 @@ export function SketchRevealScreen({ navigation, route }: Props) {
     setError(null);
     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => undefined);
     try {
-      const { total, photoUri: storedUri } = await saveSketch({ title, seconds, photoUri });
+      const { record, total, photoUri: storedUri } = await saveSketch({
+        title,
+        duration: seconds,
+        photoUri,
+        referenceUri,
+      });
+      setSketchId((current) => current ?? record.id);
       setSavedUri(storedUri);
       setBanner(total === 1 ? 'Saved to My Sketchbook' : `${total} drawings saved`);
       if (total === 1) setAskReview(true);
@@ -203,7 +229,11 @@ export function SketchRevealScreen({ navigation, route }: Props) {
     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined);
     try {
       if (Platform.OS === 'web') {
-        Alert.alert('Share to TikTok', 'The TikTok carousel export runs on the phone.');
+        try {
+          Alert.alert('Share to TikTok', 'The TikTok carousel export runs on the phone.');
+        } catch {
+          // Web builds where Alert is a no-op must not redbox.
+        }
         return;
       }
       const { captureRef } = await import('react-native-view-shot');
@@ -221,21 +251,17 @@ export function SketchRevealScreen({ navigation, route }: Props) {
       }
       await MediaLibrary.createAssetAsync(slide1);
       await MediaLibrary.createAssetAsync(slide2);
-      Alert.alert('2 Carousel slides saved to Photos!');
-      try {
-        await Linking.openURL(TIKTOK_URL);
-      } catch {
-        const available = await Sharing.isAvailableAsync();
-        if (!available) {
-          setError('TikTok did not open, and sharing is not available on this device.');
-          return;
-        }
-        await Sharing.shareAsync(slide2, {
-          mimeType: 'image/png',
-          UTI: 'public.png',
-          dialogTitle: 'Share to TikTok',
-        });
+      setBanner('2 carousel slides saved to Photos.');
+      const available = await Sharing.isAvailableAsync();
+      if (!available) {
+        setError('Sharing is not available on this device.');
+        return;
       }
+      await Sharing.shareAsync(slide2, {
+        mimeType: 'image/png',
+        UTI: 'public.png',
+        dialogTitle: 'Share to TikTok',
+      });
       markTraceShared();
     } catch {
       setError('The share sheet did not open. Try again.');
@@ -266,9 +292,22 @@ export function SketchRevealScreen({ navigation, route }: Props) {
         ]}
         showsVerticalScrollIndicator={false}
       >
-        <Pressable accessibilityRole="button" onPress={leaveToStudio} style={styles.back}>
-          <Text style={styles.backText}>Back</Text>
-        </Pressable>
+        <View style={styles.header}>
+          <Pressable accessibilityRole="button" onPress={leaveToStudio} style={styles.back}>
+            <Text style={styles.backText}>Back</Text>
+          </Pressable>
+          {sketchId ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Delete sketch"
+              disabled={deleting}
+              onPress={confirmDelete}
+              style={styles.trash}
+            >
+              <Ionicons name="trash-outline" size={22} color={PRIMARY} />
+            </Pressable>
+          ) : null}
+        </View>
         <Text style={styles.title}>{title}</Text>
         <Text style={styles.time}>{timeLine}</Text>
 
@@ -339,7 +378,7 @@ export function SketchRevealScreen({ navigation, route }: Props) {
 
         {isPro ? (
           <View style={styles.badgeRow}>
-            <Text style={styles.badgeLabel}>Include "Traced with ArtBlock" badge</Text>
+            <Text style={styles.badgeLabel}>Include ArtBlock badge</Text>
             <Switch
               value={includeBadge}
               onValueChange={(next) => {
@@ -348,7 +387,7 @@ export function SketchRevealScreen({ navigation, route }: Props) {
               }}
               trackColor={{ false: '#D1D1D6', true: PRIMARY }}
               thumbColor={colors.white}
-              accessibilityLabel='Include "Traced with ArtBlock" badge'
+              accessibilityLabel="Include ArtBlock badge"
             />
           </View>
         ) : null}
@@ -433,6 +472,20 @@ export function SketchRevealScreen({ navigation, route }: Props) {
           onDismiss={() => setPhotoPrimer(false)}
         />
       </ScrollView>
+      {deleteAsk ? (
+        <View style={styles.confirmLayer}>
+          <View style={styles.confirmCard}>
+            <Text style={styles.confirmTitle}>Delete Sketch</Text>
+            <Text style={styles.confirmBody}>Are you sure you want to permanently delete this sketch?</Text>
+            <Pressable accessibilityRole="button" onPress={() => setDeleteAsk(false)} style={styles.confirmCancel}>
+              <Text style={styles.confirmCancelText}>Cancel</Text>
+            </Pressable>
+            <Pressable accessibilityRole="button" onPress={() => void removeSavedSketch()} style={styles.confirmDelete}>
+              <Text style={styles.confirmDeleteText}>Delete</Text>
+            </Pressable>
+          </View>
+        </View>
+      ) : null}
 
       <View
         ref={slide1Ref}
@@ -498,9 +551,74 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     backgroundColor: colors.canvas,
   },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
   back: {
     alignSelf: 'flex-start',
     paddingVertical: 6,
+  },
+  trash: {
+    width: 40,
+    height: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  confirmLayer: {
+    ...StyleSheet.absoluteFill,
+    backgroundColor: 'rgba(17, 17, 24, 0.45)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 24,
+  },
+  confirmCard: {
+    width: '100%',
+    maxWidth: 360,
+    backgroundColor: colors.card,
+    borderRadius: layout.cardRadius,
+    padding: 20,
+    ...shadow,
+  },
+  confirmTitle: {
+    color: colors.ink,
+    fontFamily: fonts.headingBold,
+    fontSize: 18,
+    lineHeight: 24,
+  },
+  confirmBody: {
+    marginTop: 8,
+    color: colors.muted,
+    fontFamily: fonts.body,
+    fontSize: 15,
+    lineHeight: 22,
+  },
+  confirmCancel: {
+    marginTop: 18,
+    height: 48,
+    borderRadius: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.canvas,
+  },
+  confirmCancelText: {
+    color: colors.ink,
+    fontFamily: fonts.headingBold,
+    fontSize: 16,
+  },
+  confirmDelete: {
+    marginTop: 10,
+    height: 48,
+    borderRadius: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: PRIMARY,
+  },
+  confirmDeleteText: {
+    color: colors.white,
+    fontFamily: fonts.headingBold,
+    fontSize: 16,
   },
   backText: {
     color: PRIMARY,

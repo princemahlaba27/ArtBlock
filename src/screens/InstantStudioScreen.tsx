@@ -12,7 +12,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { RevealParams, RootStackParamList } from '../navigation/types';
 import { isPreviewDevice } from '../runtime/previewDevice';
 import { grantPremium, hasUsedFreeTrace, isPremium as readLocalPremium } from '../storage/preferences';
-import { formatDuration, listSketches, sketchPhotoUri, type SketchRecord } from '../storage/sketchbook';
+import { formatDuration, listSketches, type SketchRecord } from '../storage/sketchbook';
 import { colors, fonts, layout } from '../theme/colors';
 
 const paper = '#F8F9FD';
@@ -60,26 +60,29 @@ function formatSketchDate(iso: string): string {
 function mostRecentSketches(sketches: SketchRecord[]): SketchRecord[] {
   return [...sketches]
     .sort((a, b) => {
-      const aTime = Date.parse(a.date);
-      const bTime = Date.parse(b.date);
+      const aTime = Date.parse(a.timestamp);
+      const bTime = Date.parse(b.timestamp);
       return (Number.isNaN(bTime) ? 0 : bTime) - (Number.isNaN(aTime) ? 0 : aTime);
     })
     .slice(0, RECENT_LIMIT);
 }
 
-/** Saved sketches store the user photo, not a reference image or stencil. */
 function revealParamsForSketch(sketch: SketchRecord): RevealParams {
   return {
     title: sketch.title,
-    photoUri: sketchPhotoUri(sketch.photoFilename),
-    seconds: sketch.seconds,
+    id: sketch.id,
+    photoUri: sketch.photoUri,
+    referenceUri: sketch.referenceUri,
+    duration: sketch.duration,
+    timestamp: sketch.timestamp,
+    seconds: sketch.duration,
   };
 }
 
 function RecentSketchCard({ sketch, onPress }: { sketch: SketchRecord; onPress: () => void }) {
   const [failed, setFailed] = useState(false);
-  const when = formatSketchDate(sketch.date);
-  const duration = formatDuration(sketch.seconds);
+  const when = formatSketchDate(sketch.timestamp);
+  const duration = formatDuration(sketch.duration);
   return (
     <TouchableOpacity
       accessibilityRole="button"
@@ -94,7 +97,7 @@ function RecentSketchCard({ sketch, onPress }: { sketch: SketchRecord; onPress: 
       ) : (
         <Image
           accessibilityIgnoresInvertColors
-          source={{ uri: sketchPhotoUri(sketch.photoFilename) }}
+          source={{ uri: sketch.photoUri }}
           style={styles.recentThumb}
           resizeMode="cover"
           onError={() => setFailed(true)}
@@ -479,6 +482,7 @@ export function InstantStudioScreen({ navigation }: Props) {
             </TouchableOpacity>
           </View>
 
+          <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
           <View style={styles.ribbon}>
             <View style={styles.ribbonCopy}>
               <Text style={styles.ideaLabel}>IDEA</Text>
@@ -492,11 +496,17 @@ export function InstantStudioScreen({ navigation }: Props) {
             </TouchableOpacity>
           </View>
 
-          <View accessibilityLabel={imageUri ? prompt : 'Waiting for reference art...'} style={styles.canvas}>
+          <View
+            accessibilityLabel={imageUri ? prompt : 'Waiting for reference art...'}
+            style={[
+              styles.canvas,
+              imageUri ? styles.canvasImage : recentSketches.length > 0 ? styles.canvasWithRecent : styles.canvasEmpty,
+            ]}
+          >
             {imageUri ? (
               <Image accessibilityIgnoresInvertColors source={{ uri: imageUri }} style={styles.art} resizeMode="contain" />
             ) : (
-              <View style={styles.empty}>
+              <View style={[styles.empty, recentSketches.length > 0 && styles.emptyWithRecent]}>
                 <Ionicons name="image-outline" size={44} color={muted} />
                 <Text style={styles.emptyText}>Waiting for reference art...</Text>
               </View>
@@ -566,6 +576,7 @@ export function InstantStudioScreen({ navigation }: Props) {
               </ScrollView>
             ) : null}
           </View>
+          </ScrollView>
         </>
       )}
     </View>
@@ -577,7 +588,12 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: paper,
     paddingHorizontal: 20,
-    paddingBottom: 24,
+  },
+  scroll: {
+    flex: 1,
+  },
+  scrollContent: {
+    paddingBottom: 40,
   },
   header: {
     flexDirection: 'row',
@@ -640,8 +656,6 @@ const styles = StyleSheet.create({
     color: ink,
   },
   canvas: {
-    flex: 1,
-    maxHeight: 340,
     width: '100%',
     alignSelf: 'center',
     backgroundColor: card,
@@ -650,14 +664,27 @@ const styles = StyleSheet.create({
     marginBottom: 16,
     ...premiumShadow,
   },
+  canvasImage: {
+    height: 340,
+  },
+  canvasEmpty: {
+    minHeight: 260,
+  },
+  canvasWithRecent: {
+    minHeight: 180,
+  },
   empty: {
     flex: 1,
+    minHeight: 180,
     borderWidth: 1.5,
     borderColor: inactive,
     borderStyle: 'dashed',
     borderRadius: 16,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  emptyWithRecent: {
+    minHeight: 180,
   },
   emptyText: {
     marginTop: 8,

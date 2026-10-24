@@ -1,24 +1,33 @@
+import type { NativeStackScreenProps } from '@react-navigation/native-stack';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { useFocusEffect } from '@react-navigation/native';
 import { useCallback, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   Image,
+  Platform,
+  Pressable,
   ScrollView,
   StyleSheet,
   Text,
+  TouchableOpacity,
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import type { RootStackParamList } from '../navigation/types';
 import {
+  deleteSketch,
   formatDuration,
   listSketches,
   sevenDayStreak,
-  sketchPhotoUri,
   totalDrawingSeconds,
   type SketchRecord,
 } from '../storage/sketchbook';
 import { colors, fonts, layout, shadow } from '../theme/colors';
+
+type Props = NativeStackScreenProps<RootStackParamList, 'Sketchbook'>;
 
 function formatWhen(iso: string): string {
   const date = new Date(iso);
@@ -26,37 +35,63 @@ function formatWhen(iso: string): string {
   return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 }
 
-function SketchCard({ sketch, height }: { sketch: SketchRecord; height: number }) {
+function SketchCard({
+  sketch,
+  onPress,
+  onDelete,
+}: {
+  sketch: SketchRecord;
+  onPress: () => void;
+  onDelete: () => void;
+}) {
   const [failed, setFailed] = useState(false);
   return (
     <View style={styles.card}>
-      {failed ? (
-        <View style={[styles.missing, { height }]}>
-          <Text style={styles.missingText}>Photo unavailable</Text>
+      <TouchableOpacity
+        accessibilityRole="button"
+        accessibilityLabel={sketch.title}
+        activeOpacity={0.85}
+        onPress={onPress}
+      >
+        {failed ? (
+          <View style={styles.missing}>
+            <Text style={styles.missingText}>Photo unavailable</Text>
+          </View>
+        ) : (
+          <Image
+            source={{ uri: sketch.photoUri }}
+            style={styles.photo}
+            resizeMode="cover"
+            onError={() => setFailed(true)}
+          />
+        )}
+        <View style={styles.textBlock}>
+          <Text style={styles.cardTitle} numberOfLines={2}>
+            {sketch.title}
+          </Text>
+          <Text style={styles.cardMeta} numberOfLines={1}>
+            {formatWhen(sketch.timestamp)} · {formatDuration(sketch.duration)}
+          </Text>
         </View>
-      ) : (
-        <Image
-          source={{ uri: sketchPhotoUri(sketch.photoFilename) }}
-          style={[styles.photo, { height }]}
-          resizeMode="cover"
-          onError={() => setFailed(true)}
-        />
-      )}
-      <Text style={styles.cardTitle} numberOfLines={2}>
-        {sketch.title}
-      </Text>
-      <Text style={styles.cardMeta}>
-        {formatWhen(sketch.date)} · {formatDuration(sketch.seconds)}
-      </Text>
+      </TouchableOpacity>
+      <TouchableOpacity
+        accessibilityRole="button"
+        accessibilityLabel={`Delete ${sketch.title}`}
+        onPress={onDelete}
+        style={styles.more}
+      >
+        <Ionicons name="ellipsis-horizontal" size={18} color={colors.ink} />
+      </TouchableOpacity>
     </View>
   );
 }
 
-export function MySketchbookScreen() {
+export function MySketchbookScreen({ navigation }: Props) {
   const insets = useSafeAreaInsets();
   const [sketches, setSketches] = useState<SketchRecord[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<SketchRecord | null>(null);
 
   useFocusEffect(
     useCallback(() => {
@@ -80,11 +115,43 @@ export function MySketchbookScreen() {
     }, []),
   );
 
-  const left = sketches.filter((_, index) => index % 2 === 0);
-  const right = sketches.filter((_, index) => index % 2 === 1);
+  const openSketch = (sketch: SketchRecord) => {
+    navigation.navigate('Reveal', {
+      title: sketch.title,
+      id: sketch.id,
+      photoUri: sketch.photoUri,
+      referenceUri: sketch.referenceUri,
+      duration: sketch.duration,
+      timestamp: sketch.timestamp,
+      seconds: sketch.duration,
+    });
+  };
+
+  const removeSketch = async (sketch: SketchRecord) => {
+    setPendingDelete(null);
+    try {
+      await deleteSketch(sketch.id);
+      setSketches((current) => current.filter((item) => item.id !== sketch.id));
+      setError(null);
+    } catch {
+      setError('Could not delete this drawing.');
+    }
+  };
+
+  const confirmDelete = (sketch: SketchRecord) => {
+    if (Platform.OS === 'web') {
+      setPendingDelete(sketch);
+      return;
+    }
+    Alert.alert('Delete Sketch', 'Are you sure you want to permanently delete this sketch?', [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Delete', style: 'destructive', onPress: () => void removeSketch(sketch) },
+    ]);
+  };
 
   return (
-    <ScrollView
+    <View style={styles.screen}>
+    <ScrollView style={styles.scroll}
       contentContainerStyle={[styles.content, { paddingBottom: Math.max(insets.bottom, 20) }]}
       showsVerticalScrollIndicator={false}
     >
@@ -117,20 +184,30 @@ export function MySketchbookScreen() {
       ) : null}
 
       {loaded && !error && sketches.length > 0 ? (
-        <View style={styles.columns}>
-          <View style={styles.column}>
-            {left.map((sketch, index) => (
-              <SketchCard key={sketch.id} sketch={sketch} height={index % 2 === 0 ? 220 : 160} />
-            ))}
-          </View>
-          <View style={styles.column}>
-            {right.map((sketch, index) => (
-              <SketchCard key={sketch.id} sketch={sketch} height={index % 2 === 0 ? 160 : 220} />
-            ))}
-          </View>
+        <View style={styles.grid}>
+          {sketches.map((sketch) => (
+            <View key={sketch.id} style={styles.cell}>
+              <SketchCard sketch={sketch} onPress={() => openSketch(sketch)} onDelete={() => confirmDelete(sketch)} />
+            </View>
+          ))}
         </View>
       ) : null}
     </ScrollView>
+    {pendingDelete ? (
+      <View style={styles.confirmLayer}>
+        <View style={styles.confirmCard}>
+          <Text style={styles.confirmTitle}>Delete Sketch</Text>
+          <Text style={styles.confirmBody}>Are you sure you want to permanently delete this sketch?</Text>
+          <Pressable accessibilityRole="button" onPress={() => setPendingDelete(null)} style={styles.confirmCancel}>
+            <Text style={styles.confirmCancelText}>Cancel</Text>
+          </Pressable>
+          <Pressable accessibilityRole="button" onPress={() => void removeSketch(pendingDelete)} style={styles.confirmDelete}>
+            <Text style={styles.confirmDeleteText}>Delete</Text>
+          </Pressable>
+        </View>
+      </View>
+    ) : null}
+    </View>
   );
 }
 
@@ -146,6 +223,13 @@ function Stat({ value, label }: { value: string; label: string }) {
 }
 
 const styles = StyleSheet.create({
+  screen: {
+    flex: 1,
+    backgroundColor: colors.canvas,
+  },
+  scroll: {
+    flex: 1,
+  },
   content: {
     paddingHorizontal: 16,
     paddingTop: 8,
@@ -217,14 +301,16 @@ const styles = StyleSheet.create({
     fontSize: 15,
     lineHeight: 22,
   },
-  columns: {
+  grid: {
     flexDirection: 'row',
-    gap: 12,
+    flexWrap: 'wrap',
     marginTop: 16,
+    marginHorizontal: -6,
   },
-  column: {
-    flex: 1,
-    gap: 12,
+  cell: {
+    width: '50%',
+    paddingHorizontal: 6,
+    marginBottom: 12,
   },
   card: {
     backgroundColor: colors.card,
@@ -232,14 +318,81 @@ const styles = StyleSheet.create({
     padding: 8,
     ...shadow,
   },
+  more: {
+    position: 'absolute',
+    top: 14,
+    right: 14,
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: 'rgba(255,255,255,0.92)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  confirmLayer: {
+    ...StyleSheet.absoluteFill,
+    backgroundColor: 'rgba(17, 17, 24, 0.45)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 24,
+  },
+  confirmCard: {
+    width: '100%',
+    maxWidth: 360,
+    backgroundColor: colors.card,
+    borderRadius: layout.cardRadius,
+    padding: 20,
+    ...shadow,
+  },
+  confirmTitle: {
+    color: colors.ink,
+    fontFamily: fonts.headingBold,
+    fontSize: 18,
+    lineHeight: 24,
+  },
+  confirmBody: {
+    marginTop: 8,
+    color: colors.muted,
+    fontFamily: fonts.body,
+    fontSize: 15,
+    lineHeight: 22,
+  },
+  confirmCancel: {
+    marginTop: 18,
+    height: 48,
+    borderRadius: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.canvas,
+  },
+  confirmCancelText: {
+    color: colors.ink,
+    fontFamily: fonts.headingBold,
+    fontSize: 16,
+  },
+  confirmDelete: {
+    marginTop: 10,
+    height: 48,
+    borderRadius: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.accent,
+  },
+  confirmDeleteText: {
+    color: colors.white,
+    fontFamily: fonts.headingBold,
+    fontSize: 16,
+  },
   photo: {
     width: '100%',
-    borderRadius: 16,
+    aspectRatio: 1,
+    borderRadius: 12,
     backgroundColor: colors.stroke,
   },
   missing: {
     width: '100%',
-    borderRadius: 16,
+    aspectRatio: 1,
+    borderRadius: 12,
     backgroundColor: colors.canvas,
     alignItems: 'center',
     justifyContent: 'center',
@@ -251,8 +404,13 @@ const styles = StyleSheet.create({
     fontSize: 13,
     textAlign: 'center',
   },
-  cardTitle: {
+  textBlock: {
+    height: 56,
     marginTop: 8,
+    overflow: 'hidden',
+  },
+  cardTitle: {
+    height: 36,
     color: colors.ink,
     fontFamily: fonts.headingBold,
     fontSize: 14,
@@ -260,7 +418,7 @@ const styles = StyleSheet.create({
   },
   cardMeta: {
     marginTop: 4,
-    marginBottom: 4,
+    height: 16,
     color: colors.muted,
     fontFamily: fonts.body,
     fontSize: 12,

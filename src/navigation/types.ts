@@ -14,12 +14,19 @@ export type PaywallParams = DeckParams & {
 
 export type RevealParams = {
   title: string;
+  /** Saved sketch id. Absent until the drawing is stored in the sketchbook. */
+  id?: string;
   /** Line-art stencil from a live trace. Omitted when a saved sketch has no stencil. */
   svg?: string;
   photoUri: string;
-  seconds: number;
-  /** Original reference photo or line-art image, when one was stored with the trace. */
+  /** Seconds spent drawing. Live traces pass this; saved sketches pass `duration`. */
+  seconds?: number;
+  duration?: number;
+  timestamp?: string;
+  /** Original reference from a live trace, before it is copied into the document directory. */
   imageUri?: string;
+  /** Permanent reference image. Shown on the Reference tab when present. */
+  referenceUri?: string;
 };
 
 export type RootStackParamList = {

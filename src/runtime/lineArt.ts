@@ -1,72 +1,154 @@
+import { File } from 'expo-file-system';
 import { Platform } from 'react-native';
 
+import {
+  bytesToBase64,
+  decodeBase64,
+  decodeRaster,
+  downscale,
+  encodePng,
+  isNeonEdge,
+  paintEdges,
+  toGray,
+} from './raster';
+
 const MAX_EDGE = 420;
-const EDGE_THRESHOLD = 48;
 const INK = '#111118';
+const MAX_IMAGE_BYTES = 15 * 1024 * 1024;
+
+type Prepared = {
+  gray: Float32Array;
+  width: number;
+  height: number;
+};
+
+const prepared = new Map<string, Promise<Prepared>>();
 
 /**
- * Web line art: draw the photo into a canvas, convert it to grayscale, then run a
- * 3×3 Sobel kernel. Edges use the requested color and the paper field stays
- * transparent, so the overlay does not become a solid sheet. The bitmap is capped
- * at 420px so the convolution stays small. Native has no canvas here, so the
- * original URI is returned and the slot applies a grayscale, high-contrast
- * treatment instead of pretending this filter ran.
+ * Photo mode is the original image. Ink is dark #111118 edges on a transparent
+ * field. Neon is a different treatment: luminous #00E5FF lines with a glow, also
+ * on a transparent field. Web uses canvas pixels. Native decodes the file and
+ * runs the same edge pass, because SVG/CSS filters do not run there.
  */
 export async function toLineArt(uri: string, edge: string = INK): Promise<string> {
-  if (Platform.OS !== 'web' || typeof document === 'undefined') return uri;
-
   try {
-    const image = await loadImage(uri);
-    const scale = Math.min(1, MAX_EDGE / Math.max(image.width, image.height, 1));
-    const width = Math.max(2, Math.round(image.width * scale));
-    const height = Math.max(2, Math.round(image.height * scale));
-    const canvas = document.createElement('canvas');
-    canvas.width = width;
-    canvas.height = height;
-    const context = canvas.getContext('2d', { willReadFrequently: true });
-    if (!context) return uri;
-    context.drawImage(image, 0, 0, width, height);
-    const source = context.getImageData(0, 0, width, height);
-    const gray = new Float32Array(width * height);
-    const pixels = source.data;
-    for (let index = 0, pixel = 0; index < pixels.length; index += 4, pixel += 1) {
-      gray[pixel] = pixels[index] * 0.299 + pixels[index + 1] * 0.587 + pixels[index + 2] * 0.114;
+    const neon = isNeonEdge(edge);
+    const rgb = parseHex(neon ? '#00E5FF' : edge);
+    if (Platform.OS === 'web' && typeof document !== 'undefined') {
+      return await webLineArt(uri, rgb, neon);
     }
-
-    const [red, green, blue] = parseHex(edge);
-    const output = context.createImageData(width, height);
-    const dest = output.data;
-    for (let y = 1; y < height - 1; y += 1) {
-      for (let x = 1; x < width - 1; x += 1) {
-        const center = y * width + x;
-        const gx =
-          -gray[center - width - 1] +
-          gray[center - width + 1] +
-          -2 * gray[center - 1] +
-          2 * gray[center + 1] +
-          -gray[center + width - 1] +
-          gray[center + width + 1];
-        const gy =
-          -gray[center - width - 1] -
-          2 * gray[center - width] -
-          gray[center - width + 1] +
-          gray[center + width - 1] +
-          2 * gray[center + width] +
-          gray[center + width + 1];
-        const magnitude = Math.hypot(gx, gy);
-        if (magnitude < EDGE_THRESHOLD) continue;
-        const offset = center * 4;
-        dest[offset] = red;
-        dest[offset + 1] = green;
-        dest[offset + 2] = blue;
-        dest[offset + 3] = 255;
-      }
-    }
-    context.putImageData(output, 0, 0);
-    return canvas.toDataURL('image/png');
+    const source = await prepareNative(uri);
+    const rgba = paintEdges(source.gray, source.width, source.height, rgb, neon);
+    return `data:image/png;base64,${bytesToBase64(encodePng(rgba, source.width, source.height))}`;
   } catch {
     return uri;
   }
+}
+
+async function prepareNative(uri: string): Promise<Prepared> {
+  const existing = prepared.get(uri);
+  if (existing) return existing;
+  const job = (async () => {
+    const image = downscale(await decodeRaster(await readImageBytes(uri)), MAX_EDGE);
+    return { gray: toGray(image.data, image.width, image.height), width: image.width, height: image.height };
+  })();
+  prepared.set(uri, job);
+  job.catch(() => {
+    if (prepared.get(uri) === job) prepared.delete(uri);
+  });
+  return job;
+}
+
+async function readImageBytes(uri: string): Promise<Uint8Array> {
+  if (uri.startsWith('data:')) {
+    const comma = uri.indexOf(',');
+    if (comma < 0) throw new Error('The photo could not be read.');
+    const meta = uri.slice(0, comma);
+    const payload = uri.slice(comma + 1);
+    if (/;base64/i.test(meta)) return decodeBase64(payload);
+    return new TextEncoder().encode(decodeURIComponent(payload));
+  }
+  if (/^https?:/i.test(uri)) {
+    return fetchImageBytes(uri, 'The photo could not be read.');
+  }
+  return new File(uri).bytes();
+}
+
+async function fetchImageBytes(uri: string, message: string): Promise<Uint8Array> {
+  const response = await fetch(uri);
+  if (!response.ok) {
+    await response.body?.cancel().catch(() => undefined);
+    throw new Error(message);
+  }
+  return readBoundedResponse(response, message);
+}
+
+async function readBoundedResponse(response: Response, message: string): Promise<Uint8Array> {
+  const header = response.headers.get('content-length');
+  if (header) {
+    const declared = Number(header);
+    if (Number.isFinite(declared) && declared > MAX_IMAGE_BYTES) {
+      await response.body?.cancel().catch(() => undefined);
+      throw new Error(message);
+    }
+  }
+
+  const reader = response.body?.getReader();
+  if (!reader) {
+    const buffer = await response.arrayBuffer();
+    if (buffer.byteLength > MAX_IMAGE_BYTES) throw new Error(message);
+    return new Uint8Array(buffer);
+  }
+
+  const chunks: Uint8Array[] = [];
+  let received = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const size = value?.byteLength ?? 0;
+      if (!value || size === 0) continue;
+      if (received + size > MAX_IMAGE_BYTES) throw new Error(message);
+      chunks.push(value);
+      received += size;
+    }
+  } catch (error) {
+    await reader.cancel().catch(() => undefined);
+    throw error;
+  } finally {
+    try {
+      reader.releaseLock();
+    } catch {
+      // The reader lock was already released.
+    }
+  }
+
+  const bytes = new Uint8Array(received);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytes;
+}
+
+async function webLineArt(uri: string, rgb: [number, number, number], neon: boolean): Promise<string> {
+  const image = await loadImage(uri);
+  const scale = Math.min(1, MAX_EDGE / Math.max(image.width, image.height, 1));
+  const width = Math.max(2, Math.round(image.width * scale));
+  const height = Math.max(2, Math.round(image.height * scale));
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext('2d', { willReadFrequently: true });
+  if (!context) return uri;
+  context.drawImage(image, 0, 0, width, height);
+  const source = context.getImageData(0, 0, width, height);
+  const edges = paintEdges(toGray(new Uint8Array(source.data), width, height), width, height, rgb, neon);
+  const output = context.createImageData(width, height);
+  output.data.set(edges);
+  context.putImageData(output, 0, 0);
+  return canvas.toDataURL('image/png');
 }
 
 function parseHex(color: string): [number, number, number] {

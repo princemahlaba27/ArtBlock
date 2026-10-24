@@ -19,7 +19,7 @@ import {
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, { useAnimatedStyle, useSharedValue } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import Svg, { FeColorMatrix, Filter, Image as SvgImage, Path, SvgXml } from 'react-native-svg';
+import Svg, { Path, SvgXml } from 'react-native-svg';
 import Slider from '@react-native-community/slider';
 
 import { type LineMode } from '../data/rouletteData';
@@ -40,38 +40,6 @@ const TRACE_MODES: { id: LineMode; label: string }[] = [
   { id: 'ink', label: 'Ink' },
   { id: 'neon', label: 'Neon' },
 ];
-const GRAY_CONTRAST = [
-  0.658, 1.291, 0.251, 0, -0.55, 0.658, 1.291, 0.251, 0, -0.55, 0.658, 1.291, 0.251, 0, -0.55, 0, 0, 0, 1,
-  0,
-];
-
-function OutlinePhoto({
-  uri,
-  width,
-  height,
-  filterId,
-}: {
-  uri: string;
-  width: number;
-  height: number;
-  filterId: string;
-}) {
-  return (
-    <Svg width={width} height={height}>
-      <Filter id={filterId}>
-        <FeColorMatrix type="matrix" values={GRAY_CONTRAST} />
-      </Filter>
-      <SvgImage
-        href={{ uri }}
-        width="100%"
-        height="100%"
-        preserveAspectRatio="xMidYMid meet"
-        filter={`url(#${filterId})`}
-      />
-    </Svg>
-  );
-}
-
 function CloseIcon({ color }: { color: string }) {
   return (
     <Svg width={22} height={22} viewBox="0 0 24 24">
@@ -145,7 +113,7 @@ export function ARCameraTraceScreen({ navigation, route }: Props) {
   }, [route.params.imageUri, route.params.slots]);
 
   useEffect(() => {
-    if (Platform.OS !== 'web' || referenceUris.length === 0) return;
+    if (referenceUris.length === 0) return;
     let cancelled = false;
     void (async () => {
       const entries = await Promise.all(
@@ -261,7 +229,9 @@ export function ARCameraTraceScreen({ navigation, route }: Props) {
               svg,
               photoUri,
               seconds,
+              duration: seconds,
               imageUri: route.params.imageUri,
+              referenceUri: route.params.imageUri,
             },
           },
         ],
@@ -302,12 +272,19 @@ export function ARCameraTraceScreen({ navigation, route }: Props) {
     ]);
   };
 
-  const shownUri = (uri: string) => {
-    if (lineMode === 'normal' || Platform.OS !== 'web') return uri;
+  const overlayUri = (uri: string): string | null => {
+    if (lineMode === 'normal') return uri;
     const edge = lineMode === 'neon' ? NEON_EDGE : INK_EDGE;
-    return lineArt[`${edge}|${uri}`] ?? uri;
+    const cached = lineArt[`${edge}|${uri}`];
+    if (!cached || cached === uri) return null;
+    return cached;
   };
-  const nativeOutline = Platform.OS !== 'web' && lineMode !== 'normal';
+  const linesPending =
+    lineMode !== 'normal' &&
+    referenceUris.some((uri) => {
+      const edge = lineMode === 'neon' ? NEON_EDGE : INK_EDGE;
+      return lineArt[`${edge}|${uri}`] === undefined;
+    });
 
   if (!isSimulator && !permission) {
     return (
@@ -383,39 +360,32 @@ export function ARCameraTraceScreen({ navigation, route }: Props) {
           >
             <Animated.View pointerEvents="none" style={[styles.stencil, stencilStyle, { opacity }]}>
               {route.params.mode === 'single' && route.params.imageUri ? (
-                nativeOutline ? (
-                  <OutlinePhoto
-                    uri={route.params.imageUri}
-                    width={stencilWidth}
-                    height={stencilHeight}
-                    filterId="trace-gray-main"
-                  />
-                ) : (
+                overlayUri(route.params.imageUri) ? (
                   <Image
-                    source={{ uri: shownUri(route.params.imageUri) }}
-                    style={{ width: stencilWidth, height: stencilHeight }}
+                    source={{ uri: overlayUri(route.params.imageUri) ?? '' }}
+                    style={{ width: stencilWidth, height: stencilHeight, backgroundColor: 'transparent' }}
                     resizeMode="contain"
                   />
+                ) : (
+                  <View style={{ width: stencilWidth, height: stencilHeight }} />
                 )
               ) : route.params.slots?.some(Boolean) || route.params.imageUri ? (
                 <View style={{ width: stencilWidth, height: stencilHeight, flexDirection: 'row', flexWrap: 'wrap' }}>
                   {(route.params.slots?.length ? route.params.slots : [route.params.imageUri ?? null]).map(
-                    (uri, index) => (
-                      <View key={`${uri ?? 'empty'}-${index}`} style={{ width: '50%', height: '50%', padding: 6 }}>
-                        {uri ? (
-                          nativeOutline ? (
-                            <OutlinePhoto
-                              uri={uri}
-                              width={stencilWidth / 2 - 12}
-                              height={stencilHeight / 2 - 12}
-                              filterId={`trace-gray-${index}`}
+                    (uri, index) => {
+                      const resolved = uri ? overlayUri(uri) : null;
+                      return (
+                        <View key={`${uri ?? 'empty'}-${index}`} style={{ width: '50%', height: '50%', padding: 6 }}>
+                          {resolved ? (
+                            <Image
+                              source={{ uri: resolved }}
+                              style={{ width: '100%', height: '100%', backgroundColor: 'transparent' }}
+                              resizeMode="contain"
                             />
-                          ) : (
-                            <Image source={{ uri: shownUri(uri) }} style={{ width: '100%', height: '100%' }} resizeMode="contain" />
-                          )
-                        ) : null}
-                      </View>
-                    ),
+                          ) : null}
+                        </View>
+                      );
+                    },
                   )}
                 </View>
               ) : (
@@ -468,6 +438,7 @@ export function ARCameraTraceScreen({ navigation, route }: Props) {
         </View>
 
         <View style={[styles.dock, { marginBottom: Math.max(insets.bottom, 16) }]}>
+          {linesPending ? <Text style={styles.hint}>Preparing lines…</Text> : null}
           {capturing ? <Text style={styles.hint}>Taking the photo…</Text> : null}
           {error ? <Text style={styles.error}>{error}</Text> : null}
           <Text style={styles.hint}>
